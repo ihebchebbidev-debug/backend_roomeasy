@@ -56,7 +56,7 @@ docsRouter.get("/", (_req, res) => {
     </style>
   </head>
   <body>
-    <div class="banner">RoomEasy API &mdash; sign in with <span>POST /accounts/login</span>, copy <span>data.token</span>, then press Authorize.</div>
+    <div class="banner">RoomEasy API reference &mdash; <span>documentation complète, accès libre</span></div>
     <div id="swagger"></div>
     <script src="https://unpkg.com/swagger-ui-dist@5.17.14/swagger-ui-bundle.js" crossorigin></script>
     <script>
