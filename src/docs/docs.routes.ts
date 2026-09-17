@@ -36,7 +36,22 @@ docsRouter.get("/summary", (req, res) => {
  * production bundle stays unchanged.
  */
 docsRouter.get("/", (_req, res) => {
+  // Helmet's default policy blocks the CDN assets and the inline bootstrap
+  // script, which renders the page blank. Relax it for this page only.
+  res.setHeader(
+    "Content-Security-Policy",
+    [
+      "default-src 'self'",
+      "img-src 'self' data: https:",
+      "font-src 'self' data: https://unpkg.com",
+      "style-src 'self' 'unsafe-inline' https://unpkg.com",
+      "script-src 'self' 'unsafe-inline' https://unpkg.com",
+      "connect-src 'self'",
+    ].join("; "),
+  );
+  res.removeHeader("Cross-Origin-Embedder-Policy");
   res.type("html").send(`<!doctype html>
+
 <html lang="en">
   <head>
     <meta charset="utf-8" />
@@ -61,7 +76,7 @@ docsRouter.get("/", (_req, res) => {
     <script src="https://unpkg.com/swagger-ui-dist@5.17.14/swagger-ui-bundle.js" crossorigin></script>
     <script>
       window.ui = SwaggerUIBundle({
-        url: "openapi.json",
+        url: "/api/docs/openapi.json",
         dom_id: "#swagger",
         deepLinking: true,
         persistAuthorization: true,
