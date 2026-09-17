@@ -13,7 +13,9 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "migrate": "tsx src/db/cli-migrate.ts",
-    "seed": "tsx src/db/cli-seed.ts"
+    "seed": "tsx src/db/cli-seed.ts",
+    "test:api": "tsx src/tests/api-suite.ts",
+    "docs": "echo \"API reference: http://localhost:${PORT:-4000}/api/docs\""
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

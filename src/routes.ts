@@ -2,6 +2,7 @@ import { Router } from "express";
 
 import { asyncHandler, ok } from "@/core/http.js";
 import { databaseTarget } from "@/db/pool.js";
+import { docsRouter } from "@/docs/docs.routes.js";
 import { queryOne } from "@/db/query.js";
 import { accountsRouter } from "@/modules/accounts/accounts.routes.js";
 import { adminRouter } from "@/modules/admin/admin.routes.js";
@@ -38,6 +39,8 @@ apiRouter.get(
     return ok(res, { status: "ready", database: databaseTarget(), serverTime: row?.now.toISOString() });
   }),
 );
+
+apiRouter.use("/docs", docsRouter);
 
 apiRouter.use("/accounts", accountsRouter);
 apiRouter.use("/stays", propertiesRouter);

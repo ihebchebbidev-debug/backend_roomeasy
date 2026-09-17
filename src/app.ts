@@ -47,7 +47,7 @@ export function createApp(): Express {
   app.use(authenticate);
 
   app.get("/", (_req, res) => {
-    res.json({ service: "nestara-backend", docs: "/api/health", version: "1.0.0" });
+    res.json({ service: "nestara-backend", docs: "/api/docs", openapi: "/api/docs/openapi.json", health: "/api/health", version: "1.0.0" });
   });
 
   app.use("/api", apiRouter);
