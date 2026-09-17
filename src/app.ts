@@ -2,7 +2,6 @@ import cors from "cors";
 import express, { type Express } from "express";
 import helmet from "helmet";
 
-import { corsOrigins } from "@/config/env.js";
 import { authenticate } from "@/middleware/auth.js";
 import { errorHandler, notFoundHandler } from "@/middleware/errorHandler.js";
 import { rateLimit } from "@/middleware/rateLimit.js";
@@ -19,13 +18,20 @@ export function createApp(): Express {
   app.disable("x-powered-by");
 
   app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
+  // Any origin may call the API. The request origin is reflected (instead of
+  // "*") so that credentialed browser requests are accepted too.
   app.use(
     cors({
-      origin: corsOrigins,
+      origin: (_origin, callback) => callback(null, true),
       credentials: true,
+      methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+      allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Accept", "Origin", "stripe-signature"],
       exposedHeaders: ["x-request-id"],
+      maxAge: 86400,
+      optionsSuccessStatus: 204,
     }),
   );
+  app.options(/.*/, cors({ origin: (_origin, callback) => callback(null, true), credentials: true }));
 
   // Stripe signs the exact bytes it sent, so the webhook needs the raw body
   // and must be registered before the JSON parser.

@@ -344,10 +344,12 @@ export async function setListingStatus(
  * a guest can never lose a stay they already paid for.
  */
 export async function deleteListing(listingId: string): Promise<void> {
-  const row = await queryOne<{ property_id: string; live: string }>(
+  const row = await queryOne<{ property_id: string; live: string; total: string }>(
     `SELECT l.property_id,
             (SELECT count(*)::text FROM booking b
-              WHERE b.property_id = l.property_id AND b.status IN ('pending', 'confirmed')) AS live
+              WHERE b.property_id = l.property_id AND b.status IN ('pending', 'confirmed')) AS live,
+            (SELECT count(*)::text FROM booking b
+              WHERE b.property_id = l.property_id) AS total
        FROM listing l WHERE l.id = $1`,
     [listingId],
     { label: "listings.deleteCheck" },
@@ -357,7 +359,16 @@ export async function deleteListing(listingId: string): Promise<void> {
   if (Number(row.live) > 0) {
     throw apiError("LISTING_HAS_BOOKINGS", {
       message: `This listing has ${row.live} live booking(s). Cancel or complete them before deleting it.`,
-      details: { liveBookings: Number(row.live) },
+      details: { liveBookings: Number(row.live), totalBookings: Number(row.total) },
+    });
+  }
+
+  // Past bookings must be kept for accounting, and the booking → property foreign
+  // key is RESTRICT, so a listing with any booking history can only be unpublished.
+  if (Number(row.total) > 0) {
+    throw apiError("LISTING_HAS_BOOKINGS", {
+      message: `This listing has ${row.total} past booking(s) kept for accounting and cannot be deleted. Unpublish it instead.`,
+      details: { liveBookings: 0, totalBookings: Number(row.total) },
     });
   }
 
