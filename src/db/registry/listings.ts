@@ -1,0 +1,222 @@
+import type { TableDef } from "@/db/registry/types.js";
+
+/** Equipment catalogue, properties, listings and the availability calendar. */
+export const listingTables: TableDef[] = [
+  {
+    name: "equipment",
+    comment: "Reference catalogue used by the wizard and the search filters.",
+    primaryKey: ["id"],
+    columns: [
+      { name: "id", type: "text", notNull: true },
+      { name: "\"group\"", type: "equipment_group", notNull: true },
+      { name: "label_en", type: "text", notNull: true },
+      { name: "label_fr", type: "text", notNull: true },
+      { name: "paid", type: "boolean", notNull: true, default: "false" },
+      { name: "active", type: "boolean", notNull: true, default: "true" },
+    ],
+    indexes: [
+      { name: "equipment_group_idx", on: "\"group\"" },
+      {
+        name: "equipment_search_idx",
+        using: "gin",
+        on: "to_tsvector('simple', label_en || ' ' || label_fr)",
+      },
+    ],
+  },
+
+  {
+    name: "property",
+    primaryKey: ["id"],
+    touchUpdatedAt: true,
+    columns: [
+      { name: "id", type: "text", notNull: true },
+      { name: "host_id", type: "uuid", references: "host_profile(user_id) ON DELETE SET NULL" },
+      { name: "name", type: "text", notNull: true, check: "char_length(name) BETWEEN 4 AND 120" },
+      { name: "category", type: "property_category", notNull: true, default: "'apartment'" },
+      { name: "summary", type: "text", check: "summary IS NULL OR char_length(summary) <= 300" },
+      { name: "description", type: "text", check: "description IS NULL OR char_length(description) <= 4000" },
+      { name: "city", type: "text", notNull: true, default: "''" },
+      { name: "country", type: "text", notNull: true, default: "''" },
+      { name: "neighbourhood", type: "text" },
+      { name: "postal_code", type: "text" },
+      { name: "latitude", type: "numeric(9,6)", check: "latitude BETWEEN -90 AND 90" },
+      { name: "longitude", type: "numeric(9,6)", check: "longitude BETWEEN -180 AND 180" },
+      { name: "guests", type: "integer", notNull: true, default: "2", check: "guests BETWEEN 1 AND 64" },
+      { name: "rooms", type: "integer", notNull: true, default: "1", check: "rooms BETWEEN 1 AND 40" },
+      { name: "beds", type: "integer", notNull: true, default: "1", check: "beds BETWEEN 1 AND 64" },
+      { name: "baths", type: "integer", notNull: true, default: "1", check: "baths BETWEEN 1 AND 40" },
+      { name: "area_sqm", type: "integer", notNull: true, default: "40", check: "area_sqm BETWEEN 10 AND 5000" },
+      {
+        name: "base_price_usd",
+        type: "numeric(12,2)",
+        notNull: true,
+        default: "100",
+        check: "base_price_usd BETWEEN 10 AND 100000",
+      },
+      { name: "cleaning_fee_usd", type: "numeric(12,2)", notNull: true, default: "0", check: "cleaning_fee_usd >= 0" },
+      { name: "min_nights", type: "integer", notNull: true, default: "1", check: "min_nights BETWEEN 1 AND 365" },
+      { name: "cancellation_policy", type: "cancellation_policy", notNull: true, default: "'moderate'" },
+      { name: "house_rules", type: "text", check: "house_rules IS NULL OR char_length(house_rules) <= 2000" },
+      { name: "check_in", type: "time" },
+      { name: "check_out", type: "time" },
+      { name: "instant_book", type: "boolean", notNull: true, default: "false" },
+      { name: "rating", type: "numeric(3,2)", notNull: true, default: "0", check: "rating BETWEEN 0 AND 5" },
+      { name: "review_count", type: "integer", notNull: true, default: "0", check: "review_count >= 0" },
+      { name: "superhost", type: "boolean", notNull: true, default: "false", note: "Denormalised for the search filter." },
+      { name: "created_at", type: "timestamptz", notNull: true, default: "now()" },
+      { name: "updated_at", type: "timestamptz", notNull: true, default: "now()" },
+    ],
+    indexes: [
+      { name: "property_host_idx", on: "host_id" },
+      { name: "property_category_idx", on: "category" },
+      { name: "property_city_idx", on: "lower(city)" },
+      { name: "property_postal_idx", on: "postal_code" },
+      { name: "property_price_idx", on: "base_price_usd" },
+      {
+        name: "property_search_idx",
+        using: "gin",
+        on: "to_tsvector('simple', name || ' ' || city || ' ' || country || ' ' || coalesce(postal_code, ''))",
+      },
+    ],
+  },
+
+  {
+    name: "property_translation",
+    primaryKey: ["property_id", "locale"],
+    columns: [
+      { name: "property_id", type: "text", notNull: true, references: "property(id) ON DELETE CASCADE" },
+      { name: "locale", type: "text", notNull: true, check: "locale IN ('en', 'fr', 'es', 'de', 'pt')" },
+      { name: "location_label", type: "text", notNull: true },
+      { name: "name", type: "text" },
+      { name: "summary", type: "text" },
+      { name: "description", type: "text" },
+    ],
+  },
+
+  {
+    name: "property_photo",
+    primaryKey: ["id"],
+    columns: [
+      { name: "id", type: "uuid", notNull: true, default: "gen_random_uuid()" },
+      { name: "property_id", type: "text", notNull: true, references: "property(id) ON DELETE CASCADE" },
+      { name: "url", type: "text", notNull: true },
+      { name: "alt_text", type: "text" },
+      { name: "position", type: "integer", notNull: true, default: "0", check: "position BETWEEN 0 AND 9" },
+      { name: "created_at", type: "timestamptz", notNull: true, default: "now()" },
+    ],
+    constraints: [{ name: "property_photo_position_unique", definition: "UNIQUE (property_id, position)" }],
+    indexes: [{ name: "property_photo_property_idx", on: "property_id" }],
+  },
+
+  {
+    name: "property_amenity",
+    primaryKey: ["property_id", "amenity"],
+    columns: [
+      { name: "property_id", type: "text", notNull: true, references: "property(id) ON DELETE CASCADE" },
+      { name: "amenity", type: "amenity_id", notNull: true },
+    ],
+  },
+
+  {
+    name: "property_equipment",
+    primaryKey: ["property_id", "equipment_id"],
+    columns: [
+      { name: "property_id", type: "text", notNull: true, references: "property(id) ON DELETE CASCADE" },
+      { name: "equipment_id", type: "text", notNull: true, references: "equipment(id) ON DELETE RESTRICT" },
+      { name: "paid", type: "boolean" },
+      { name: "note", type: "text" },
+    ],
+    indexes: [{ name: "property_equipment_equipment_idx", on: "equipment_id" }],
+  },
+
+  {
+    name: "property_tag",
+    primaryKey: ["property_id", "tag"],
+    columns: [
+      { name: "property_id", type: "text", notNull: true, references: "property(id) ON DELETE CASCADE" },
+      { name: "tag", type: "text", notNull: true },
+    ],
+  },
+
+  {
+    name: "listing",
+    comment: "Host-facing listing record: status, approval and live pricing rules.",
+    primaryKey: ["id"],
+    touchUpdatedAt: true,
+    columns: [
+      { name: "id", type: "text", notNull: true },
+      { name: "property_id", type: "text", notNull: true, unique: true, references: "property(id) ON DELETE CASCADE" },
+      { name: "status", type: "listing_status", notNull: true, default: "'draft'" },
+      { name: "approved", type: "boolean", notNull: true, default: "false" },
+      { name: "rejected_reason", type: "text", note: "Filled when an admin rejects the approval request." },
+      {
+        name: "nightly_usd",
+        type: "numeric(12,2)",
+        notNull: true,
+        default: "100",
+        check: "nightly_usd BETWEEN 10 AND 100000",
+      },
+      { name: "long_stay_enabled", type: "boolean", notNull: true, default: "false" },
+      {
+        name: "long_stay_threshold",
+        type: "integer",
+        notNull: true,
+        default: "7",
+        check: "long_stay_threshold BETWEEN 1 AND 365",
+      },
+      {
+        name: "long_stay_discount",
+        type: "numeric(5,2)",
+        notNull: true,
+        default: "10",
+        check: "long_stay_discount BETWEEN 0 AND 90",
+      },
+      { name: "mobile_enabled", type: "boolean", notNull: true, default: "false" },
+      {
+        name: "mobile_discount",
+        type: "numeric(5,2)",
+        notNull: true,
+        default: "5",
+        check: "mobile_discount BETWEEN 0 AND 90",
+      },
+      { name: "published_at", type: "timestamptz" },
+      { name: "created_at", type: "timestamptz", notNull: true, default: "now()" },
+      { name: "updated_at", type: "timestamptz", notNull: true, default: "now()" },
+    ],
+    indexes: [
+      { name: "listing_status_idx", on: "status" },
+      { name: "listing_approved_idx", on: "approved" },
+    ],
+  },
+
+  {
+    name: "listing_submission",
+    comment: "Every wizard save, stored verbatim (ListingDraft JSON) for audit and replay.",
+    primaryKey: ["id"],
+    columns: [
+      { name: "id", type: "uuid", notNull: true, default: "gen_random_uuid()" },
+      { name: "listing_id", type: "text", notNull: true, references: "listing(id) ON DELETE CASCADE" },
+      { name: "property_id", type: "text", notNull: true, references: "property(id) ON DELETE CASCADE" },
+      { name: "submitted_by", type: "uuid", references: "app_user(id) ON DELETE SET NULL" },
+      { name: "status", type: "listing_status", notNull: true, default: "'draft'" },
+      { name: "payload", type: "jsonb", notNull: true },
+      { name: "submitted_at", type: "timestamptz", notNull: true, default: "now()" },
+    ],
+    indexes: [{ name: "listing_submission_listing_idx", on: "listing_id, submitted_at DESC" }],
+  },
+
+  {
+    name: "calendar_night",
+    comment: "Per-night availability and price override, keyed by property + date.",
+    primaryKey: ["property_id", "night"],
+    columns: [
+      { name: "property_id", type: "text", notNull: true, references: "property(id) ON DELETE CASCADE" },
+      { name: "night", type: "date", notNull: true },
+      { name: "blocked", type: "boolean", notNull: true, default: "false" },
+      { name: "price_usd", type: "numeric(12,2)", check: "price_usd IS NULL OR price_usd >= 0" },
+      { name: "note", type: "text" },
+      { name: "updated_at", type: "timestamptz", notNull: true, default: "now()" },
+    ],
+    indexes: [{ name: "calendar_night_night_idx", on: "night" }],
+  },
+];

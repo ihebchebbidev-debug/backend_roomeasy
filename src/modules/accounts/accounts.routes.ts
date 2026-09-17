@@ -1,0 +1,242 @@
+import { Router } from "express";
+import { z } from "zod";
+
+import { apiError } from "@/core/errors.js";
+import { asyncHandler, created, noContent, ok } from "@/core/http.js";
+import { email as emailField, password as passwordField, validateBody } from "@/core/validate.js";
+import { isProduction } from "@/config/env.js";
+import { currentUser, requireAuth, signAccessToken } from "@/middleware/auth.js";
+import { rateLimit } from "@/middleware/rateLimit.js";
+import {
+  changePassword,
+  createAccount,
+  createPasswordResetToken,
+  findAccountById,
+  grantRole,
+  recordCookieConsent,
+  findAccountByEmail,
+  resetPasswordForDev,
+  resetPasswordWithToken,
+  trustBadgesFor,
+  updateProfile,
+  verifyCredentials,
+} from "@/modules/accounts/accounts.repository.js";
+import type { AccountDto } from "@/modules/accounts/accounts.repository.js";
+
+export const accountsRouter = Router();
+
+const signupSchema = z.object({
+  fullName: z.string().trim().min(2, "Enter your full name.").max(120),
+  email: emailField,
+  password: passwordField,
+  phone: z.string().trim().max(40).optional(),
+  locale: z.enum(["en", "fr", "es", "de", "pt"]).optional(),
+  currency: z.string().trim().length(3).optional(),
+  /** A host signs up straight from "List your place". */
+  asHost: z.boolean().optional(),
+});
+
+const loginSchema = z.object({ email: emailField, password: z.string().min(1, "Enter your password.") });
+
+const profileSchema = z
+  .object({
+    fullName: z.string().trim().min(2).max(120).optional(),
+    phone: z.string().trim().max(40).nullable().optional(),
+    avatarUrl: z.string().trim().url("Enter a valid image URL.").max(500).nullable().optional(),
+    locale: z.enum(["en", "fr", "es", "de", "pt"]).optional(),
+    currency: z.string().trim().length(3).optional(),
+    twoFactorEnabled: z.boolean().optional(),
+  })
+  .refine((value) => Object.keys(value).length > 0, "Send at least one field to change.");
+
+function session(account: AccountDto) {
+  return {
+    account,
+    token: signAccessToken({
+      sub: account.id,
+      email: account.email,
+      roles: account.roles,
+      verified: account.verified,
+    }),
+  };
+}
+
+const authLimiter = rateLimit({ windowMs: 15 * 60_000, max: 30, name: "auth" });
+
+accountsRouter.post(
+  "/signup",
+  authLimiter,
+  asyncHandler(async (req, res) => {
+    const body = validateBody(signupSchema, req);
+    const account = await createAccount({
+      fullName: body.fullName,
+      email: body.email,
+      password: body.password,
+      phone: body.phone ?? null,
+      locale: body.locale,
+      currency: body.currency,
+      roles: body.asHost ? ["guest", "host"] : ["guest"],
+    });
+    req.log.info({ userId: account.id, roles: account.roles }, "account created");
+    return created(res, session(account));
+  }),
+);
+
+accountsRouter.post(
+  "/login",
+  authLimiter,
+  asyncHandler(async (req, res) => {
+    const body = validateBody(loginSchema, req);
+    const account = await verifyCredentials(body.email, body.password);
+    req.log.info({ userId: account.id }, "sign-in succeeded");
+    return ok(res, session(account));
+  }),
+);
+
+/** Issues a fresh token for the current session (silent refresh). */
+accountsRouter.post(
+  "/refresh",
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const account = await findAccountById(currentUser(req).userId);
+    if (!account) throw apiError("TOKEN_INVALID", { message: "The account on this session no longer exists." });
+    return ok(res, session(account));
+  }),
+);
+
+accountsRouter.get(
+  "/me",
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const account = await findAccountById(currentUser(req).userId);
+    if (!account) throw apiError("NOT_FOUND", { message: "This account no longer exists." });
+    return ok(res, account);
+  }),
+);
+
+accountsRouter.patch(
+  "/me",
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const patch = validateBody(profileSchema, req);
+    const account = await updateProfile(currentUser(req).userId, patch);
+    return ok(res, account);
+  }),
+);
+
+accountsRouter.post(
+  "/me/password",
+  requireAuth,
+  authLimiter,
+  asyncHandler(async (req, res) => {
+    const body = validateBody(
+      z.object({ currentPassword: z.string().min(1, "Enter your current password."), newPassword: passwordField }),
+      req,
+    );
+    await changePassword(currentUser(req).userId, body.currentPassword, body.newPassword);
+    req.log.info({ userId: currentUser(req).userId }, "password changed");
+    return noContent(res);
+  }),
+);
+
+/** "Become a host" — adds the host role and the public host profile. */
+accountsRouter.post(
+  "/me/become-host",
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const body = validateBody(z.object({ displayName: z.string().trim().min(2).max(120).optional() }), req);
+    const account = await grantRole(currentUser(req).userId, "host", body.displayName);
+    return ok(res, account);
+  }),
+);
+
+accountsRouter.get(
+  "/me/trust-badges",
+  requireAuth,
+  asyncHandler(async (req, res) => ok(res, await trustBadgesFor(currentUser(req).userId))),
+);
+
+accountsRouter.post(
+  "/forgot-password",
+  rateLimit({ windowMs: 15 * 60_000, max: 10, name: "forgot-password" }),
+  asyncHandler(async (req, res) => {
+    const body = validateBody(z.object({ email: emailField }), req);
+    const issued = await createPasswordResetToken(body.email, req.ip ?? null);
+
+    // The answer is identical whether or not the address exists, so the
+    // endpoint cannot be used to enumerate accounts.
+    req.log.info({ email: body.email, issued: Boolean(issued) }, "password reset requested");
+
+    return ok(res, {
+      message: "If an account uses that address, a reset link is on its way.",
+      // Outside production the token is returned so the flow is testable
+      // before an email provider is connected.
+      ...(isProduction || !issued ? {} : { devToken: issued.token, expiresAt: issued.expiresAt }),
+    });
+  }),
+);
+
+accountsRouter.post(
+  "/reset-password",
+  rateLimit({ windowMs: 15 * 60_000, max: 20, name: "reset-password" }),
+  asyncHandler(async (req, res) => {
+    const body = validateBody(z.object({ token: z.string().min(10, "This reset link is not valid."), password: passwordField }), req);
+    await resetPasswordWithToken(body.token, body.password);
+    return ok(res, { message: "Your password has been changed. Sign in with the new password." });
+  }),
+);
+
+/**
+ * Development-only helper behind the hidden /dev-admin screen: creates an
+ * administrator (or promotes an existing account) so every back-office feature
+ * can be tried without touching the database by hand. Disabled in production.
+ */
+accountsRouter.post(
+  "/dev/admin",
+  authLimiter,
+  asyncHandler(async (req, res) => {
+    if (isProduction) throw apiError("FORBIDDEN", { message: "This helper is disabled in production." });
+
+    const body = validateBody(
+      z.object({
+        fullName: z.string().trim().min(2).max(120).optional(),
+        email: emailField,
+        password: passwordField,
+      }),
+      req,
+    );
+
+    const existing = await findAccountByEmail(body.email);
+    if (existing) {
+      await resetPasswordForDev(existing.id, body.password);
+      const account = await grantRole(existing.id, "admin");
+      req.log.warn({ userId: account.id }, "existing account promoted to admin (dev helper)");
+      return ok(res, { ...session(account), created: false });
+    }
+
+    const account = await createAccount({
+      fullName: body.fullName ?? "Platform administrator",
+      email: body.email,
+      password: body.password,
+      roles: ["admin", "guest"],
+    });
+    req.log.warn({ userId: account.id }, "admin account created (dev helper)");
+    return created(res, { ...session(account), created: true });
+  }),
+);
+
+accountsRouter.post(
+  "/cookie-consent",
+  asyncHandler(async (req, res) => {
+    const body = validateBody(
+      z.object({ choice: z.enum(["accepted", "essential"]), deviceId: z.string().trim().max(120).optional() }),
+      req,
+    );
+    await recordCookieConsent({
+      userId: req.auth?.userId ?? null,
+      deviceId: body.deviceId ?? null,
+      choice: body.choice,
+    });
+    return noContent(res);
+  }),
+);

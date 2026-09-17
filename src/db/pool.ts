@@ -1,0 +1,60 @@
+import { Pool, type PoolClient, type PoolConfig } from "pg";
+
+import { env } from "@/config/env.js";
+import { log } from "@/core/logger.js";
+
+const logger = log("db");
+
+function poolConfig(): PoolConfig {
+  const ssl = env.PGSSL ? { rejectUnauthorized: false } : undefined;
+  if (env.DATABASE_URL.trim()) {
+    return { connectionString: env.DATABASE_URL, max: env.PG_POOL_MAX, ssl };
+  }
+  return {
+    host: env.PGHOST,
+    port: env.PGPORT,
+    user: env.PGUSER,
+    password: env.PGPASSWORD,
+    database: env.PGDATABASE,
+    max: env.PG_POOL_MAX,
+    ssl,
+  };
+}
+
+export const pool = new Pool({
+  ...poolConfig(),
+  application_name: "nestara-backend",
+  idleTimeoutMillis: 30_000,
+  connectionTimeoutMillis: 10_000,
+});
+
+pool.on("error", (error) => {
+  logger.error({ err: error }, "Idle PostgreSQL client errored");
+});
+
+/** Human readable target, used in the boot banner (never logs the password). */
+export function databaseTarget(): string {
+  if (env.DATABASE_URL.trim()) {
+    try {
+      const url = new URL(env.DATABASE_URL);
+      return `${url.hostname}:${url.port || 5432}${url.pathname}`;
+    } catch {
+      return "DATABASE_URL";
+    }
+  }
+  return `${env.PGHOST}:${env.PGPORT}/${env.PGDATABASE}`;
+}
+
+export async function withClient<T>(fn: (client: PoolClient) => Promise<T>): Promise<T> {
+  const client = await pool.connect();
+  try {
+    return await fn(client);
+  } finally {
+    client.release();
+  }
+}
+
+export async function closePool(): Promise<void> {
+  await pool.end();
+  logger.info("PostgreSQL pool closed");
+}

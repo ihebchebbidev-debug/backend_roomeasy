@@ -1,0 +1,656 @@
+import { Router } from "express";
+import { z } from "zod";
+
+import { apiError } from "@/core/errors.js";
+import { asyncHandler, created, ok } from "@/core/http.js";
+import { validateBody, validateParams, validateQuery } from "@/core/validate.js";
+import { currentUser } from "@/middleware/auth.js";
+import { requireCapability } from "@/middleware/permissions.js";
+import { adminReports, setListingSuspended } from "@/modules/admin/admin.repository.js";
+import { recordModeration } from "@/modules/admin/moderation.repository.js";
+import { listNotifications, notificationCounts, queueNotification } from "@/modules/admin/notifications.repository.js";
+import {
+  adjustBooking,
+  adminCancelBooking,
+  bookingAuditTrail,
+  listHostCommissions,
+  listVerifications,
+  refundBooking,
+  setHostCommission,
+  setUserBanned,
+  setVerification,
+} from "@/modules/admin/operations.repository.js";
+import { dispatchQueuedEmails, requeueNotification } from "@/modules/notifications/dispatcher.js";
+import { mailerStatus, verifyMailer } from "@/modules/notifications/mailer.js";
+import { stripeStatus } from "@/modules/payments/stripe.client.js";
+import { listListingReports, setReportStatus } from "@/modules/admin/reports.repository.js";
+import {
+  addTicketMessage,
+  assignTicket,
+  getTicket,
+  listTickets,
+  setTicketStatus,
+} from "@/modules/admin/support.repository.js";
+
+/**
+ * Second half of the back office: listing reports, member verification and
+ * bans, per-host commission, forced cancellations and refunds, the support
+ * desk and the notification queue. Mounted inside `adminRouter`, so the
+ * administrator-role check has already run.
+ */
+export const adminOperationsRouter = Router();
+
+const pagination = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(25),
+  offset: z.coerce.number().int().min(0).default(0),
+});
+
+const uuidParam = <K extends string>(key: K) =>
+  z.object({ [key]: z.string().uuid("That identifier is not valid.") } as Record<K, z.ZodString>);
+
+// --- listing reports ---------------------------------------------------------
+
+adminOperationsRouter.get(
+  "/listing-reports",
+  requireCapability("listings.read"),
+  asyncHandler(async (req, res) => {
+    const input = validateQuery(
+      pagination.extend({
+        status: z.enum(["open", "reviewing", "resolved", "dismissed", "all"]).default("open"),
+        listingId: z.string().trim().max(140).optional(),
+      }),
+      req,
+    );
+    const result = await listListingReports(input);
+    return ok(res, result.items, {
+      total: result.total,
+      openCount: result.openCount,
+      limit: input.limit,
+      offset: input.offset,
+    });
+  }),
+);
+
+adminOperationsRouter.post(
+  "/listing-reports/:reportId/status",
+  requireCapability("listings.moderate"),
+  asyncHandler(async (req, res) => {
+    const { reportId } = validateParams(uuidParam("reportId"), req);
+    const { status, resolution } = validateBody(
+      z.object({
+        status: z.enum(["open", "reviewing", "resolved", "dismissed"]),
+        resolution: z.string().trim().max(600).optional(),
+      }),
+      req,
+    );
+    const admin = currentUser(req);
+    const report = await setReportStatus({ reportId, status, resolution, adminId: admin.userId });
+    if (status === "resolved" || status === "dismissed") {
+      await recordModeration({
+        adminId: admin.userId,
+        action: status === "resolved" ? "listing_report_resolved" : "listing_report_dismissed",
+        targetKind: "report",
+        targetId: reportId,
+        reason: resolution ?? null,
+        metadata: { listingId: report.listingId },
+      });
+    }
+    return ok(res, report);
+  }),
+);
+
+/** Take a listing off the site with a reason; the host is notified. */
+adminOperationsRouter.post(
+  "/listings/:listingId/unpublish",
+  requireCapability("listings.moderate"),
+  asyncHandler(async (req, res) => {
+    const { listingId } = validateParams(z.object({ listingId: z.string().trim().min(1).max(140) }), req);
+    const { reason, reportId } = validateBody(
+      z.object({
+        reason: z.string().trim().min(5, "Tell the host why, in at least 5 characters.").max(600),
+        reportId: z.string().uuid().optional(),
+      }),
+      req,
+    );
+    const admin = currentUser(req);
+    const listing = await setListingSuspended(listingId, true);
+    await recordModeration({
+      adminId: admin.userId,
+      action: "listing_suspended",
+      targetKind: "listing",
+      targetId: listingId,
+      reason,
+      metadata: reportId ? { reportId } : {},
+    });
+    if (reportId) {
+      await setReportStatus({ reportId, status: "resolved", resolution: reason, adminId: admin.userId });
+    }
+    if (listing.hostId) {
+      await queueNotification({
+        recipientId: listing.hostId,
+        template: "listing_suspended",
+        subject: "Your listing has been taken offline",
+        body: `An administrator has taken your listing offline. Reason: ${reason}`,
+        payload: { listingId, reason },
+      });
+    }
+    return ok(res, listing);
+  }),
+);
+
+// --- members: verification & ban ---------------------------------------------
+
+adminOperationsRouter.get(
+  "/verifications",
+  requireCapability("users.read"),
+  asyncHandler(async (req, res) => {
+    const input = validateQuery(
+      pagination.extend({ status: z.enum(["pending", "verified", "rejected"]).optional() }),
+      req,
+    );
+    return ok(res, await listVerifications(input));
+  }),
+);
+
+adminOperationsRouter.post(
+  "/users/:userId/verification",
+  requireCapability("users.manage"),
+  asyncHandler(async (req, res) => {
+    const { userId } = validateParams(uuidParam("userId"), req);
+    const { status, notes, documentKind } = validateBody(
+      z.object({
+        status: z.enum(["pending", "verified", "rejected"]),
+        notes: z.string().trim().max(600).optional(),
+        documentKind: z.string().trim().max(80).optional(),
+      }),
+      req,
+    );
+    const admin = currentUser(req);
+    const result = await setVerification({ userId, status, notes, documentKind, adminId: admin.userId });
+    await recordModeration({
+      adminId: admin.userId,
+      action: "user_verification_updated",
+      targetKind: "user",
+      targetId: userId,
+      reason: notes ?? null,
+      metadata: { status },
+    });
+    if (status !== "pending") {
+      await queueNotification({
+        recipientId: userId,
+        template: status === "verified" ? "identity_verified" : "identity_rejected",
+        subject: status === "verified" ? "Your identity is verified" : "We could not verify your identity",
+        body:
+          status === "verified"
+            ? "Your identity has been verified. Your account is now fully active."
+            : `We could not verify your identity. ${notes ?? "Please send a clearer document."}`,
+        payload: { status },
+      });
+    }
+    return ok(res, result);
+  }),
+);
+
+adminOperationsRouter.post(
+  "/users/:userId/ban",
+  requireCapability("users.manage"),
+  asyncHandler(async (req, res) => {
+    const { userId } = validateParams(uuidParam("userId"), req);
+    const { reason } = validateBody(
+      z.object({ reason: z.string().trim().min(5, "Give a reason of at least 5 characters.").max(600) }),
+      req,
+    );
+    const admin = currentUser(req);
+    const account = await setUserBanned({ userId, banned: true, reason, adminId: admin.userId });
+    await recordModeration({
+      adminId: admin.userId,
+      action: "user_banned",
+      targetKind: "user",
+      targetId: userId,
+      reason,
+    });
+    await queueNotification({
+      recipientId: userId,
+      recipientEmail: account.email,
+      template: "account_banned",
+      subject: "Your RoomEasy account has been closed",
+      body: `An administrator has permanently closed your account. Reason: ${reason}`,
+      payload: { reason },
+    });
+    req.log.warn({ userId, reason }, "account banned");
+    return ok(res, account);
+  }),
+);
+
+adminOperationsRouter.post(
+  "/users/:userId/unban",
+  requireCapability("users.manage"),
+  asyncHandler(async (req, res) => {
+    const { userId } = validateParams(uuidParam("userId"), req);
+    const admin = currentUser(req);
+    const account = await setUserBanned({ userId, banned: false, adminId: admin.userId });
+    await recordModeration({ adminId: admin.userId, action: "user_unbanned", targetKind: "user", targetId: userId });
+    return ok(res, account);
+  }),
+);
+
+// --- per-host commission ------------------------------------------------------
+
+adminOperationsRouter.get(
+  "/commissions",
+  requireCapability("finance.read"),
+  asyncHandler(async (req, res) => {
+    const input = validateQuery(pagination, req);
+    return ok(res, await listHostCommissions(input));
+  }),
+);
+
+adminOperationsRouter.put(
+  "/commissions/:hostId",
+  requireCapability("finance.manage"),
+  asyncHandler(async (req, res) => {
+    const { hostId } = validateParams(uuidParam("hostId"), req);
+    const { commissionRate, note } = validateBody(
+      z.object({
+        commissionRate: z.number().min(0).max(100).nullable(),
+        note: z.string().trim().max(300).optional(),
+      }),
+      req,
+    );
+    const admin = currentUser(req);
+    const result = await setHostCommission({ hostId, commissionRate, note, adminId: admin.userId });
+    await recordModeration({
+      adminId: admin.userId,
+      action: "commission_updated",
+      targetKind: "commission",
+      targetId: hostId,
+      reason: note ?? null,
+      metadata: { commissionRate },
+    });
+    await queueNotification({
+      recipientId: hostId,
+      template: "commission_updated",
+      subject: "Your commission rate has changed",
+      body:
+        commissionRate === null
+          ? "Your listings now use the standard platform commission."
+          : `Your commission rate is now ${commissionRate}%.`,
+      payload: { commissionRate },
+    });
+    return ok(res, result);
+  }),
+);
+
+// --- bookings: forced cancellation, refunds, adjustments ----------------------
+
+const bookingParams = z.object({ bookingId: z.string().trim().min(1).max(140) });
+
+adminOperationsRouter.get(
+  "/bookings/:bookingId/audit",
+  requireCapability("bookings.read"),
+  asyncHandler(async (req, res) => {
+    const { bookingId } = validateParams(bookingParams, req);
+    return ok(res, await bookingAuditTrail(bookingId));
+  }),
+);
+
+adminOperationsRouter.post(
+  "/bookings/:bookingId/cancel",
+  requireCapability("bookings.manage"),
+  asyncHandler(async (req, res) => {
+    const { bookingId } = validateParams(bookingParams, req);
+    const { reason, refundPercent } = validateBody(
+      z.object({
+        reason: z.string().trim().min(5, "Give a reason of at least 5 characters.").max(600),
+        refundPercent: z.number().min(0).max(100).default(100),
+      }),
+      req,
+    );
+    const admin = currentUser(req);
+    const result = await adminCancelBooking({ bookingId, reason, refundPercent, adminId: admin.userId });
+    await recordModeration({
+      adminId: admin.userId,
+      action: "booking_cancelled_admin",
+      targetKind: "booking",
+      targetId: bookingId,
+      reason,
+      metadata: { refundPercent, refundUsd: result.refundUsd },
+    });
+    if (result.guestId) {
+      await queueNotification({
+        recipientId: result.guestId,
+        recipientEmail: result.guestEmail,
+        template: "booking_cancelled_by_admin",
+        subject: `Booking ${result.reference} has been cancelled`,
+        body: `An administrator cancelled your booking. Reason: ${reason}. Refund: ${result.refundUsd} USD.`,
+        payload: { bookingId, refundUsd: result.refundUsd },
+      });
+    }
+    req.log.warn({ bookingId, reason, refundPercent }, "booking cancelled by admin");
+    return ok(res, result);
+  }),
+);
+
+adminOperationsRouter.post(
+  "/bookings/:bookingId/refund",
+  requireCapability("finance.manage"),
+  asyncHandler(async (req, res) => {
+    const { bookingId } = validateParams(bookingParams, req);
+    const { amountUsd, reason } = validateBody(
+      z.object({
+        amountUsd: z.number().positive("Enter an amount above zero."),
+        reason: z.string().trim().min(5, "Give a reason of at least 5 characters.").max(600),
+      }),
+      req,
+    );
+    const admin = currentUser(req);
+    const booking = await refundBooking({ bookingId, amountUsd, reason, adminId: admin.userId });
+    await recordModeration({
+      adminId: admin.userId,
+      action: "booking_refunded",
+      targetKind: "booking",
+      targetId: bookingId,
+      reason,
+      metadata: { amountUsd },
+    });
+    if (booking.guestId) {
+      await queueNotification({
+        recipientId: booking.guestId,
+        recipientEmail: booking.guestEmail,
+        template: "booking_refunded",
+        subject: `A refund of ${amountUsd} USD has been issued`,
+        body: `We refunded ${amountUsd} USD on booking ${booking.reference}. Reason: ${reason}`,
+        payload: { bookingId, amountUsd },
+      });
+    }
+    return created(res, booking);
+  }),
+);
+
+adminOperationsRouter.post(
+  "/bookings/:bookingId/adjust",
+  requireCapability("bookings.manage"),
+  asyncHandler(async (req, res) => {
+    const { bookingId } = validateParams(bookingParams, req);
+    const input = validateBody(
+      z
+        .object({
+          checkIn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+          checkOut: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+          totalUsd: z.number().min(0).optional(),
+          reason: z.string().trim().min(5, "Give a reason of at least 5 characters.").max(600),
+        })
+        .refine((value) => value.checkIn || value.checkOut || value.totalUsd !== undefined, {
+          message: "Change at least the dates or the amount.",
+        }),
+      req,
+    );
+    const admin = currentUser(req);
+    const booking = await adjustBooking({ ...input, bookingId, adminId: admin.userId });
+    await recordModeration({
+      adminId: admin.userId,
+      action: "booking_modified",
+      targetKind: "booking",
+      targetId: bookingId,
+      reason: input.reason,
+      metadata: { checkIn: input.checkIn, checkOut: input.checkOut, totalUsd: input.totalUsd },
+    });
+    return ok(res, booking);
+  }),
+);
+
+// --- support desk -------------------------------------------------------------
+
+adminOperationsRouter.get(
+  "/tickets",
+  requireCapability("support.manage"),
+  asyncHandler(async (req, res) => {
+    const input = validateQuery(
+      pagination.extend({
+        status: z.enum(["open", "pending", "resolved", "closed", "all"]).default("open"),
+        category: z.enum(["booking", "payment", "listing", "account", "dispute", "other"]).optional(),
+        assignedTo: z.string().uuid().optional(),
+        search: z.string().trim().max(120).optional(),
+      }),
+      req,
+    );
+    const result = await listTickets(input);
+    return ok(res, result.items, {
+      total: result.total,
+      openCount: result.openCount,
+      limit: input.limit,
+      offset: input.offset,
+    });
+  }),
+);
+
+adminOperationsRouter.get(
+  "/tickets/:ticketId",
+  requireCapability("support.manage"),
+  asyncHandler(async (req, res) => {
+    const { ticketId } = validateParams(uuidParam("ticketId"), req);
+    return ok(res, await getTicket(ticketId));
+  }),
+);
+
+adminOperationsRouter.post(
+  "/tickets/:ticketId/messages",
+  requireCapability("support.manage"),
+  asyncHandler(async (req, res) => {
+    const { ticketId } = validateParams(uuidParam("ticketId"), req);
+    const { body, internalNote } = validateBody(
+      z.object({
+        body: z.string().trim().min(1, "Write a reply.").max(4000),
+        internalNote: z.boolean().default(false),
+      }),
+      req,
+    );
+    const admin = currentUser(req);
+    await addTicketMessage({
+      ticketId,
+      authorId: admin.userId,
+      authorName: admin.email,
+      authorRole: "admin",
+      body,
+      internalNote,
+    });
+    const ticket = await getTicket(ticketId);
+    if (!internalNote && ticket.openedById) {
+      await queueNotification({
+        recipientId: ticket.openedById,
+        recipientEmail: ticket.openedByEmail,
+        template: "support_reply",
+        subject: `Reply to your request ${ticket.reference}`,
+        body,
+        payload: { ticketId },
+      });
+    }
+    return created(res, ticket);
+  }),
+);
+
+adminOperationsRouter.post(
+  "/tickets/:ticketId/assign",
+  requireCapability("support.manage"),
+  asyncHandler(async (req, res) => {
+    const { ticketId } = validateParams(uuidParam("ticketId"), req);
+    const { adminId } = validateBody(z.object({ adminId: z.string().uuid().nullable() }), req);
+    const admin = currentUser(req);
+    const ticket = await assignTicket(ticketId, adminId);
+    await recordModeration({
+      adminId: admin.userId,
+      action: "ticket_assigned",
+      targetKind: "ticket",
+      targetId: ticketId,
+      metadata: { assignedTo: adminId },
+    });
+    return ok(res, ticket);
+  }),
+);
+
+adminOperationsRouter.post(
+  "/tickets/:ticketId/status",
+  requireCapability("support.manage"),
+  asyncHandler(async (req, res) => {
+    const { ticketId } = validateParams(uuidParam("ticketId"), req);
+    const { status, resolution } = validateBody(
+      z.object({
+        status: z.enum(["open", "pending", "resolved", "closed"]),
+        resolution: z.string().trim().max(600).optional(),
+      }),
+      req,
+    );
+    const admin = currentUser(req);
+    const ticket = await setTicketStatus({ ticketId, status, resolution });
+    await recordModeration({
+      adminId: admin.userId,
+      action: "ticket_status_changed",
+      targetKind: "ticket",
+      targetId: ticketId,
+      reason: resolution ?? null,
+      metadata: { status },
+    });
+    return ok(res, ticket);
+  }),
+);
+
+// --- notification queue -------------------------------------------------------
+
+adminOperationsRouter.get(
+  "/notifications",
+  requireCapability("audit.read"),
+  asyncHandler(async (req, res) => {
+    const input = validateQuery(
+      pagination.extend({ status: z.enum(["queued", "sent", "failed"]).optional() }),
+      req,
+    );
+    return ok(res, await listNotifications(input));
+  }),
+);
+
+// --- statistics: comparison and export ---------------------------------------
+
+adminOperationsRouter.get(
+  "/stats/compare",
+  requireCapability("stats.read"),
+  asyncHandler(async (req, res) => {
+    const { months } = validateQuery(z.object({ months: z.coerce.number().int().min(1).max(24).default(6) }), req);
+    const reports = await adminReports(months * 2);
+    const series = reports.monthly;
+    const current = series.slice(-months);
+    const previous = series.slice(-months * 2, -months);
+    const sum = (rows: typeof series, key: "bookings" | "revenueUsd" | "commissionUsd") =>
+      rows.reduce((total, row) => total + row[key], 0);
+    const delta = (now: number, before: number) => (before === 0 ? (now > 0 ? 100 : 0) : ((now - before) / before) * 100);
+
+    return ok(res, {
+      months,
+      current: {
+        bookings: sum(current, "bookings"),
+        revenueUsd: sum(current, "revenueUsd"),
+        commissionUsd: sum(current, "commissionUsd"),
+      },
+      previous: {
+        bookings: sum(previous, "bookings"),
+        revenueUsd: sum(previous, "revenueUsd"),
+        commissionUsd: sum(previous, "commissionUsd"),
+      },
+      change: {
+        bookings: delta(sum(current, "bookings"), sum(previous, "bookings")),
+        revenueUsd: delta(sum(current, "revenueUsd"), sum(previous, "revenueUsd")),
+        commissionUsd: delta(sum(current, "commissionUsd"), sum(previous, "commissionUsd")),
+      },
+      series,
+    });
+  }),
+);
+
+adminOperationsRouter.get(
+  "/stats/export.csv",
+  requireCapability("stats.read"),
+  asyncHandler(async (req, res) => {
+    const { months } = validateQuery(z.object({ months: z.coerce.number().int().min(1).max(36).default(12) }), req);
+    const reports = await adminReports(months);
+    const lines = [
+      "section,label,bookings,revenue_usd,commission_usd",
+      ...reports.monthly.map((row) => `monthly,${row.month},${row.bookings},${row.revenueUsd},${row.commissionUsd}`),
+      ...reports.topListings.map(
+        (row) => `listing,"${row.name.replace(/"/g, '""')}",${row.bookings},${row.revenueUsd},`,
+      ),
+      ...reports.topHosts.map((row) => `host,"${row.hostName.replace(/"/g, '""')}",${row.listings},${row.revenueUsd},`),
+      ...reports.cancellations.map(
+        (row) => `cancellation,"${row.reason.replace(/"/g, '""')}",${row.count},${row.refundedUsd},`,
+      ),
+    ];
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="roomeasy-statistics-${months}m.csv"`);
+    return res.status(200).send(lines.join("\n"));
+  }),
+);
+
+/* -------------------------------------------------------------------------- */
+/* Email delivery: SMTP health, manual drain, retry and a test message.       */
+/* -------------------------------------------------------------------------- */
+
+adminOperationsRouter.get(
+  "/email/status",
+  requireCapability("settings.manage"),
+  asyncHandler(async (_req, res) => {
+    const mail = mailerStatus();
+    const counts = await notificationCounts();
+    return ok(res, {
+      smtp: {
+        configured: mail.configured,
+        dryRun: mail.dryRun,
+        host: mail.host,
+        port: mail.port,
+        secure: mail.secure,
+        from: mail.from,
+        missing: mail.missing,
+      },
+      payments: stripeStatus(),
+      queue: counts,
+    });
+  }),
+);
+
+adminOperationsRouter.post(
+  "/email/verify",
+  requireCapability("settings.manage"),
+  asyncHandler(async (_req, res) => ok(res, await verifyMailer())),
+);
+
+adminOperationsRouter.post(
+  "/email/dispatch",
+  requireCapability("settings.manage"),
+  asyncHandler(async (_req, res) => ok(res, await dispatchQueuedEmails())),
+);
+
+adminOperationsRouter.post(
+  "/email/test",
+  requireCapability("settings.manage"),
+  asyncHandler(async (req, res) => {
+    const { to } = validateBody(z.object({ to: z.string().trim().email() }), req);
+    const admin = currentUser(req);
+    await queueNotification({
+      recipientEmail: to,
+      template: "support_reply",
+      subject: "Test message from the back office",
+      body: `This is a test email sent from the administration space by ${admin.email}.\n\nIf you can read this, outgoing email works.`,
+    });
+    const result = await dispatchQueuedEmails(5);
+    return created(res, { queued: true, ...result });
+  }),
+);
+
+adminOperationsRouter.post(
+  "/notifications/:id/retry",
+  requireCapability("settings.manage"),
+  asyncHandler(async (req, res) => {
+    const { id } = validateParams(z.object({ id: z.string().uuid() }), req);
+    const requeued = await requeueNotification(id);
+    if (!requeued) throw apiError("NOT_FOUND", { message: "That email is not in the queue." });
+    const result = await dispatchQueuedEmails(5);
+    return ok(res, { retried: true, ...result });
+  }),
+);

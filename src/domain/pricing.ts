@@ -1,0 +1,120 @@
+import { isWeekendNight, stayNights, today } from "@/core/dates.js";
+
+/**
+ * The authoritative quote engine — a direct port of `src/lib/pricing.ts` so a
+ * price shown in the app always equals the price the server charges.
+ *
+ * Two documented differences from the front-end mock:
+ *  1. the cleaning fee is a real line and is added to the total;
+ *  2. the `weekend` rate rule is returned as `weekendSurcharge` but is NOT
+ *     applied, exactly like the front-end, which never used it. Set
+ *     `applyWeekend: true` to switch it on once the client confirms the rule.
+ */
+
+export type DiscountKind = "longStay" | "mobile" | "lastMinute";
+
+export type PriceLine = { id: DiscountKind; percent: number; amount: number };
+
+export type PriceBreakdown = {
+  currency: "USD";
+  nightly: number;
+  nights: number;
+  baseSubtotal: number;
+  discounts: PriceLine[];
+  subtotal: number;
+  cleaningFee: number;
+  serviceFee: number;
+  taxes: number;
+  total: number;
+  /** Informational: what the weekend rule would add if it were enabled. */
+  weekendSurcharge: number;
+};
+
+export type QuoteContext = {
+  from: string;
+  to: string;
+  nightlyUsd: number;
+  cleaningFeeUsd: number;
+  /** ISO date → price override / blocked flag. */
+  calendar: Record<string, { blocked: boolean; priceUsd: number | null }>;
+  longStay: { enabled: boolean; threshold: number; discount: number };
+  mobile: { enabled: boolean; discount: number };
+  rateRules: { weekend: number; longStay: number; lastMinute: number };
+  serviceFeeRate: number;
+  taxRate: number;
+  isMobile: boolean;
+  applyWeekend?: boolean;
+};
+
+const round = (value: number) => Math.round(value);
+
+export function computeQuote(context: QuoteContext): PriceBreakdown {
+  const nights = stayNights(context.from, context.to);
+
+  const baseSubtotal = nights.reduce((sum, night) => {
+    const override = context.calendar[night]?.priceUsd;
+    return sum + (override ?? context.nightlyUsd);
+  }, 0);
+
+  const weekendNights = nights.filter(isWeekendNight);
+  const weekendSurcharge =
+    context.rateRules.weekend > 0
+      ? round(
+          weekendNights.reduce((sum, night) => {
+            const nightly = context.calendar[night]?.priceUsd ?? context.nightlyUsd;
+            return sum + (nightly * context.rateRules.weekend) / 100;
+          }, 0),
+        )
+      : 0;
+
+  const chargedBase = context.applyWeekend ? baseSubtotal + weekendSurcharge : baseSubtotal;
+
+  const discounts: PriceLine[] = [];
+
+  if (context.longStay.enabled && nights.length >= context.longStay.threshold && context.longStay.discount > 0) {
+    discounts.push({
+      id: "longStay",
+      percent: context.longStay.discount,
+      amount: round((chargedBase * context.longStay.discount) / 100),
+    });
+  }
+
+  if (context.isMobile && context.mobile.enabled && context.mobile.discount > 0) {
+    discounts.push({
+      id: "mobile",
+      percent: context.mobile.discount,
+      amount: round((chargedBase * context.mobile.discount) / 100),
+    });
+  }
+
+  if (context.rateRules.lastMinute > 0) {
+    const daysAhead =
+      (new Date(`${context.from}T00:00:00Z`).getTime() - new Date(`${today()}T00:00:00Z`).getTime()) / 86_400_000;
+    if (daysAhead >= 0 && daysAhead <= 7) {
+      discounts.push({
+        id: "lastMinute",
+        percent: context.rateRules.lastMinute,
+        amount: round((chargedBase * context.rateRules.lastMinute) / 100),
+      });
+    }
+  }
+
+  const subtotal = Math.max(0, chargedBase - discounts.reduce((sum, line) => sum + line.amount, 0));
+  const cleaningFee = round(context.cleaningFeeUsd);
+  const serviceFee = round(subtotal * context.serviceFeeRate);
+  const taxes = round(subtotal * context.taxRate);
+
+  return {
+    currency: "USD",
+    nightly: context.nightlyUsd,
+    nights: nights.length,
+    baseSubtotal: chargedBase,
+    discounts,
+    subtotal,
+    cleaningFee,
+    serviceFee,
+    taxes,
+    total: subtotal + cleaningFee + serviceFee + taxes,
+    weekendSurcharge,
+  };
+}
