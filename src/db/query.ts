@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { PoolClient, QueryResultRow } from "pg";
 
 import { env } from "@/config/env.js";
-import { apiError, type ApiErrorCode } from "@/core/errors.js";
+import { ApiError, apiError, type ApiErrorCode } from "@/core/errors.js";
 import { log } from "@/core/logger.js";
 import { pool, withClient } from "@/db/pool.js";
 import { reconcileSchema } from "@/db/migrate.js";
@@ -47,6 +47,9 @@ const constraintErrors: Record<string, { code: ApiErrorCode; message: string }> 
 };
 
 export function translateDatabaseError(error: unknown, context: { sql?: string } = {}) {
+  // An ApiError thrown inside a transaction already carries its own code and
+  // status; it must not be mistaken for a PostgreSQL error and become a 500.
+  if (error instanceof ApiError) return error;
   if (!isPgError(error)) return error;
 
   const constraint = error.constraint ?? "";
