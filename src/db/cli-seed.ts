@@ -3,7 +3,8 @@ import { log } from "@/core/logger.js";
 import { reconcileSchema } from "@/db/migrate.js";
 import { closePool, databaseTarget } from "@/db/pool.js";
 import { query } from "@/db/query.js";
-import { DEMO_ACCOUNTS, EQUIPMENT_SEED } from "@/db/seed-data.js";
+import { DEMO_ACCOUNTS } from "@/db/seed-data.js";
+import { syncEquipmentCatalogue } from "@/db/sync-equipment.js";
 import { createAccount, findAccountByEmail, grantRole } from "@/modules/accounts/accounts.repository.js";
 import type { Role } from "@/middleware/auth.js";
 
@@ -13,24 +14,6 @@ import type { Role } from "@/middleware/auth.js";
  * production, three demo logins. Safe to run repeatedly.
  */
 const logger = log("seed-cli");
-
-async function seedEquipment(): Promise<number> {
-  for (const item of EQUIPMENT_SEED) {
-    await query(
-      `INSERT INTO equipment (id, "group", label_en, label_fr, paid, active)
-       VALUES ($1, $2::equipment_group, $3, $4, $5, true)
-       ON CONFLICT (id) DO UPDATE
-         SET "group" = EXCLUDED."group",
-             label_en = EXCLUDED.label_en,
-             label_fr = EXCLUDED.label_fr,
-             paid = EXCLUDED.paid,
-             active = true`,
-      [item.id, item.group, item.labelEn, item.labelFr, item.paid ?? false],
-      { label: "seed.equipment" },
-    );
-  }
-  return EQUIPMENT_SEED.length;
-}
 
 async function seedPlatformSettings(): Promise<void> {
   await query(`INSERT INTO platform_settings (id) VALUES (true) ON CONFLICT (id) DO NOTHING`, [], {
@@ -73,7 +56,7 @@ async function main(): Promise<void> {
 
   if (env.AUTO_MIGRATE) await reconcileSchema();
 
-  const equipment = await seedEquipment();
+  const equipment = await syncEquipmentCatalogue();
   await seedPlatformSettings();
 
   let demoAccounts = 0;

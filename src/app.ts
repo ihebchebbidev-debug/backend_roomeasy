@@ -3,6 +3,8 @@ import express, { type Express } from "express";
 import helmet from "helmet";
 
 import { authenticate } from "@/middleware/auth.js";
+import { cacheControl } from "@/middleware/cacheControl.js";
+import { compression } from "@/middleware/compression.js";
 import { errorHandler, notFoundHandler } from "@/middleware/errorHandler.js";
 import { rateLimit } from "@/middleware/rateLimit.js";
 import { requestContext } from "@/middleware/requestContext.js";
@@ -16,6 +18,12 @@ export function createApp(): Express {
   // Behind the hosting proxy, so `req.ip` is the real client address.
   app.set("trust proxy", 1);
   app.disable("x-powered-by");
+  // Strong-ish ETags let browsers revalidate big listing payloads with a 304.
+  app.set("etag", "strong");
+  app.set("query parser", "simple");
+
+  // Compresses JSON responses before anything writes a body.
+  app.use(compression());
 
   app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
   // Any origin may call the API. The request origin is reflected (instead of
@@ -51,6 +59,9 @@ export function createApp(): Express {
 
   // Attaches `req.auth` when a token is present, without rejecting anonymous calls.
   app.use(authenticate);
+
+  // Cache hints: short CDN caching for anonymous catalogue reads, no-store elsewhere.
+  app.use(cacheControl);
 
   app.get("/", (_req, res) => {
     res.json({ service: "nestara-backend", docs: "/api/docs", openapi: "/api/docs/openapi.json", health: "/api/health", version: "1.0.0" });

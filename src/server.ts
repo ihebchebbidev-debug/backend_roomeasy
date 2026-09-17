@@ -4,6 +4,7 @@ import { createApp } from "@/app.js";
 import { env, isProduction } from "@/config/env.js";
 import { log } from "@/core/logger.js";
 import { reconcileSchema } from "@/db/migrate.js";
+import { syncEquipmentCatalogue } from "@/db/sync-equipment.js";
 import { closePool, databaseTarget } from "@/db/pool.js";
 import { startNotificationWorker, stopNotificationWorker } from "@/modules/notifications/dispatcher.js";
 import { mailerStatus } from "@/modules/notifications/mailer.js";
@@ -20,6 +21,15 @@ async function bootstrap(): Promise<void> {
     logger.info({ ...report, durationMs: Date.now() - started }, "database schema reconciled");
   } else {
     logger.warn("AUTO_MIGRATE is off — the schema is assumed to be up to date");
+  }
+
+  // The amenity catalogue is reference data the listing form validates against,
+  // so it is kept in sync on every boot.
+  try {
+    const count = await syncEquipmentCatalogue();
+    logger.info({ count }, "equipment catalogue synced");
+  } catch (error) {
+    logger.error({ err: error }, "equipment catalogue sync failed");
   }
 
   const mail = mailerStatus();

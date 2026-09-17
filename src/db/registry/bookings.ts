@@ -46,6 +46,9 @@ export const bookingTables: TableDef[] = [
       { name: "booking_property_idx", on: "property_id, check_in" },
       { name: "booking_guest_idx", on: "guest_id, check_in DESC" },
       { name: "booking_status_idx", on: "status" },
+      { name: "booking_status_created_idx", on: "status, created_at DESC" },
+      { name: "booking_created_idx", on: "created_at DESC" },
+      { name: "booking_property_status_idx", on: "property_id, status" },
     ],
   },
 
@@ -80,6 +83,7 @@ export const bookingTables: TableDef[] = [
     indexes: [
       { name: "payment_booking_idx", on: "booking_id" },
       { name: "payment_intent_idx", on: "stripe_payment_intent_id" },
+      { name: "payment_status_created_idx", on: "status, created_at DESC" },
     ],
   },
 
@@ -111,7 +115,10 @@ export const bookingTables: TableDef[] = [
       { name: "payout_date", type: "date", notNull: true, default: "CURRENT_DATE" },
       { name: "created_at", type: "timestamptz", notNull: true, default: "now()" },
     ],
-    indexes: [{ name: "payout_host_idx", on: "host_id, payout_date DESC" }],
+    indexes: [
+      { name: "payout_host_idx", on: "host_id, payout_date DESC" },
+      { name: "payout_status_idx", on: "status, payout_date DESC" },
+    ],
   },
 
   {

@@ -26,6 +26,15 @@ export const pool = new Pool({
   application_name: "nestara-backend",
   idleTimeoutMillis: 30_000,
   connectionTimeoutMillis: 10_000,
+  // Keeps pooled sockets alive through NAT/idle timeouts instead of paying a
+  // fresh TLS handshake on the next request.
+  keepAlive: true,
+  keepAliveInitialDelayMillis: 5_000,
+  // A runaway query can never pin a connection for more than 15s.
+  statement_timeout: 15_000,
+  query_timeout: 20_000,
+  // Recycles connections so a long-lived process cannot accumulate bloat.
+  maxLifetimeSeconds: 1_800,
 });
 
 pool.on("error", (error) => {

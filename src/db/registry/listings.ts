@@ -72,6 +72,9 @@ export const listingTables: TableDef[] = [
       { name: "property_city_idx", on: "lower(city)" },
       { name: "property_postal_idx", on: "postal_code" },
       { name: "property_price_idx", on: "base_price_usd" },
+      { name: "property_city_price_idx", on: "lower(city), base_price_usd" },
+      { name: "property_created_idx", on: "created_at DESC" },
+      { name: "property_superhost_idx", on: "superhost", where: "superhost" },
       {
         name: "property_search_idx",
         using: "gin",
@@ -186,6 +189,8 @@ export const listingTables: TableDef[] = [
     indexes: [
       { name: "listing_status_idx", on: "status" },
       { name: "listing_approved_idx", on: "approved" },
+      { name: "listing_live_idx", on: "published_at DESC", where: "status = 'published' AND approved" },
+      { name: "listing_status_approved_idx", on: "status, approved, published_at DESC" },
     ],
   },
 
