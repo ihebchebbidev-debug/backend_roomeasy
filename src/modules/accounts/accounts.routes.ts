@@ -4,7 +4,9 @@ import { z } from "zod";
 import { apiError } from "@/core/errors.js";
 import { asyncHandler, created, noContent, ok } from "@/core/http.js";
 import { email as emailField, password as passwordField, validateBody } from "@/core/validate.js";
-import { isProduction } from "@/config/env.js";
+import { env, isProduction } from "@/config/env.js";
+import { queueNotification } from "@/modules/admin/notifications.repository.js";
+import { dispatchQueuedEmails } from "@/modules/notifications/dispatcher.js";
 import { currentUser, requireAuth, signAccessToken } from "@/middleware/auth.js";
 import { rateLimit } from "@/middleware/rateLimit.js";
 import {
@@ -215,8 +217,31 @@ accountsRouter.post(
     const body = validateBody(z.object({ email: emailField }), req);
     const issued = await createPasswordResetToken(body.email, req.ip ?? null);
 
-    // The answer is identical whether or not the address exists, so the
-    // endpoint cannot be used to enumerate accounts.
+    // A real address gets the link by email; the reply below stays identical
+    // either way so the endpoint cannot be used to enumerate accounts.
+    if (issued) {
+      const link = `${env.APP_PUBLIC_URL.replace(/\/+$/, "")}/reset-password?token=${encodeURIComponent(issued.token)}`;
+      await queueNotification({
+        recipientEmail: body.email,
+        template: "password_reset",
+        subject: `Reset your ${env.APP_NAME} password`,
+        body: [
+          "We received a request to choose a new password for your account.",
+          "",
+          `Open this link to set it: ${link}`,
+          "",
+          "The link works once and expires in one hour.",
+          "If you did not ask for this, you can ignore this message — your password stays unchanged.",
+        ].join("\n"),
+        payload: { expiresAt: issued.expiresAt },
+      });
+      // Password resets are time-sensitive: flush the queue now instead of
+      // waiting for the background worker's next tick.
+      void dispatchQueuedEmails(5).catch((error) =>
+        req.log.error({ err: error }, "password reset email could not be sent immediately"),
+      );
+    }
+
     req.log.info({ email: body.email, issued: Boolean(issued) }, "password reset requested");
 
     return ok(res, {

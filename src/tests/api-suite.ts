@@ -346,6 +346,48 @@ async function run() {
     assert(badges !== undefined, "no badges payload");
   });
 
+  const PNG_DATA_URL =
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+
+  await test("PUT /accounts/me/avatar needs a token", async () => {
+    await call("/accounts/me/avatar", { method: "PUT", body: { dataUrl: PNG_DATA_URL }, expect: 401 });
+  });
+
+  await test("PUT /accounts/me/avatar refuses a non-image payload", async () => {
+    await call("/accounts/me/avatar", {
+      method: "PUT",
+      token: state.guestToken,
+      body: { dataUrl: "data:text/plain;base64,aGVsbG8=" },
+      expect: [400, 415, 422],
+    });
+  });
+
+  await test("PUT /accounts/me/avatar stores the profile photo", async () => {
+    const account = await data("/accounts/me/avatar", {
+      method: "PUT",
+      token: state.guestToken,
+      body: { dataUrl: PNG_DATA_URL },
+    });
+    assert(account.avatarUrl === `/api/accounts/${state.guestId}/avatar`, "avatarUrl was not linked");
+  });
+
+  await test("GET /accounts/:id/avatar serves the image publicly", async () => {
+    const response = await fetch(`${API}/accounts/${state.guestId}/avatar`);
+    assert(response.status === 200, `expected 200, got ${response.status}`);
+    assert((response.headers.get("content-type") ?? "").startsWith("image/png"), "wrong content type");
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    assert(bytes.length > 0 && bytes[0] === 0x89, "the stored bytes are not a PNG");
+  });
+
+  await test("DELETE /accounts/me/avatar removes the profile photo", async () => {
+    const account = await data("/accounts/me/avatar", { method: "DELETE", token: state.guestToken });
+    assert(!account.avatarUrl, "avatarUrl was not cleared");
+    const response = await fetch(`${API}/accounts/${state.guestId}/avatar`);
+    assert(response.status === 404, `expected 404 after removal, got ${response.status}`);
+  });
+
+
+
   await test("POST /accounts/forgot-password never leaks whether the address exists", async () => {
     const known = await data("/accounts/forgot-password", { method: "POST", body: { email: guestEmail } });
     const unknown = await data("/accounts/forgot-password", {

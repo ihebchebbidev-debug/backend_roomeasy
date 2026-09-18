@@ -98,6 +98,23 @@ op("post", "/accounts/me/become-host", {
   body: obj({ displayName: str }),
 });
 op("get", "/accounts/me/trust-badges", { summary: "Trust badges for the current account", tags: ["Accounts"], auth: "user" });
+op("put", "/accounts/me/avatar", {
+  summary: "Upload or replace the profile photo (JPEG, PNG or WebP data URL, max 2 MB)",
+  tags: ["Accounts"],
+  auth: "user",
+  body: obj({ dataUrl: { type: "string", example: "data:image/jpeg;base64,..." } }, ["dataUrl"]),
+});
+op("delete", "/accounts/me/avatar", {
+  summary: "Remove the profile photo",
+  tags: ["Accounts"],
+  auth: "user",
+});
+op("get", "/accounts/{userId}/avatar", {
+  summary: "The public profile photo of an account (image bytes)",
+  tags: ["Accounts"],
+  auth: "none",
+  params: ["userId"],
+});
 op("post", "/accounts/forgot-password", {
   summary: "Request a password reset link",
   tags: ["Accounts"],

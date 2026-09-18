@@ -15,7 +15,8 @@ export type NotificationTemplate =
   | "support_reply"
   | "payouts_ready"
   | "booking_confirmed"
-  | "payment_failed";
+  | "payment_failed"
+  | "password_reset";
 
 /**
  * Every administrator decision that affects a member is queued here as an

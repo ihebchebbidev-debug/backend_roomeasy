@@ -6,6 +6,19 @@ import { log } from "@/core/logger.js";
 const logger = log("mailer");
 
 /**
+ * Mailbox credentials are pinned here on purpose (no .env involved).
+ * OVH: ssl0.ovh.net, 465 implicit SSL (use 587 + secure:false for STARTTLS).
+ */
+const SMTP = {
+  host: "ssl0.ovh.net",
+  port: 465,
+  secure: true, // false when port is 587 (STARTTLS)
+  user: "remquip_email_confirmationaccoun@luccibyey.com.tn",
+  password: "Dadouhibou2025",
+  from: "remquip_email_confirmationaccoun@luccibyey.com.tn",
+} as const;
+
+/**
  * SMTP delivery, written for OVH but valid for any provider.
  *
  * OVH defaults (Exchange / MX Plan / Email Pro):
@@ -30,15 +43,15 @@ export type MailerStatus = {
 
 function missingSettings(): string[] {
   const missing: string[] = [];
-  if (!env.SMTP_HOST) missing.push("SMTP_HOST");
-  if (!env.SMTP_USER) missing.push("SMTP_USER");
-  if (!env.SMTP_PASSWORD) missing.push("SMTP_PASSWORD");
+  if (!SMTP.host) missing.push("SMTP_HOST");
+  if (!SMTP.user) missing.push("SMTP_USER");
+  if (!SMTP.password) missing.push("SMTP_PASSWORD");
   if (!fromAddress()) missing.push("MAIL_FROM_ADDRESS");
   return missing;
 }
 
 function fromAddress(): string {
-  return (env.MAIL_FROM_ADDRESS || env.SMTP_USER || "").trim();
+  return (SMTP.from || SMTP.user).trim();
 }
 
 export function mailFrom(): string {
@@ -53,10 +66,10 @@ export function mailerStatus(): MailerStatus {
   return {
     configured: missing.length === 0,
     dryRun: env.MAIL_DRY_RUN,
-    host: env.SMTP_HOST || null,
-    port: env.SMTP_HOST ? env.SMTP_PORT : null,
-    secure: env.SMTP_SECURE,
-    user: env.SMTP_USER || null,
+    host: SMTP.host,
+    port: SMTP.port,
+    secure: SMTP.secure,
+    user: SMTP.user,
     from: mailFrom(),
     missing,
   };
@@ -69,11 +82,11 @@ function getTransporter(): Transporter | null {
   if (transporter) return transporter;
 
   transporter = nodemailer.createTransport({
-    host: env.SMTP_HOST,
-    port: env.SMTP_PORT,
+    host: SMTP.host,
+    port: SMTP.port,
     // 465 = implicit TLS, 587 = STARTTLS upgrade.
-    secure: env.SMTP_SECURE,
-    auth: { user: env.SMTP_USER, pass: env.SMTP_PASSWORD },
+    secure: SMTP.secure,
+    auth: { user: SMTP.user, pass: SMTP.password },
     pool: true,
     maxConnections: 3,
     maxMessages: 50,
@@ -82,7 +95,7 @@ function getTransporter(): Transporter | null {
     socketTimeout: 30_000,
   });
 
-  logger.info({ host: env.SMTP_HOST, port: env.SMTP_PORT, secure: env.SMTP_SECURE }, "smtp transport ready");
+  logger.info({ host: SMTP.host, port: SMTP.port, secure: SMTP.secure }, "smtp transport ready");
   return transporter;
 }
 
