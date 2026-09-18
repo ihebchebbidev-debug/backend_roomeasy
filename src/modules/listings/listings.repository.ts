@@ -58,6 +58,8 @@ export type HostListingRow = {
   approved: boolean;
   rejectedReason: string | null;
   nightlyUsd: number;
+  longStay: { enabled: boolean; threshold: number; discount: number };
+  mobile: { enabled: boolean; discount: number };
   guests: number;
   rating: number;
   reviewCount: number;
@@ -388,6 +390,11 @@ export async function listHostListings(hostId: string): Promise<HostListingRow[]
     approved: boolean;
     rejected_reason: string | null;
     nightly_usd: string;
+    long_stay_enabled: boolean;
+    long_stay_threshold: number;
+    long_stay_discount: string;
+    mobile_enabled: boolean;
+    mobile_discount: string;
     guests: number;
     rating: string;
     review_count: number;
@@ -397,7 +404,9 @@ export async function listHostListings(hostId: string): Promise<HostListingRow[]
     updated_at: Date;
   }>(
     `SELECT l.id AS listing_id, l.property_id, p.name, p.city, p.country, p.category::text AS category,
-            l.status::text AS status, l.approved, l.rejected_reason, l.nightly_usd, p.guests,
+            l.status::text AS status, l.approved, l.rejected_reason, l.nightly_usd,
+            l.long_stay_enabled, l.long_stay_threshold, l.long_stay_discount,
+            l.mobile_enabled, l.mobile_discount, p.guests,
             p.rating, p.review_count,
             (SELECT url FROM property_photo ph WHERE ph.property_id = p.id ORDER BY ph.position LIMIT 1) AS photo,
             (SELECT count(*)::text FROM booking b
@@ -422,6 +431,12 @@ export async function listHostListings(hostId: string): Promise<HostListingRow[]
     approved: row.approved,
     rejectedReason: row.rejected_reason,
     nightlyUsd: Number(row.nightly_usd),
+    longStay: {
+      enabled: row.long_stay_enabled,
+      threshold: row.long_stay_threshold,
+      discount: Number(row.long_stay_discount),
+    },
+    mobile: { enabled: row.mobile_enabled, discount: Number(row.mobile_discount) },
     guests: row.guests,
     rating: Number(row.rating),
     reviewCount: row.review_count,

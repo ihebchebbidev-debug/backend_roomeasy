@@ -321,12 +321,18 @@ export async function listUsers(options: {
   search?: string;
   role?: Role;
   suspended?: boolean;
+  /** Narrows the list to one account, used when returning a just-changed row. */
+  userId?: string;
   limit: number;
   offset: number;
 }): Promise<{ items: AdminUserRow[]; total: number }> {
   const values: unknown[] = [];
   const where: string[] = [];
 
+  if (options.userId) {
+    values.push(options.userId);
+    where.push(`u.id = $${values.length}`);
+  }
   if (options.search?.trim()) {
     values.push(`%${options.search.trim()}%`);
     where.push(`(u.full_name ILIKE $${values.length} OR u.email ILIKE $${values.length})`);
@@ -416,12 +422,13 @@ export async function setUserSuspended(input: {
     throw apiError("NOT_FOUND", { message: "That account does not exist.", details: { userId: input.userId } });
   }
 
-  const { items } = await listUsers({ limit: 1, offset: 0, search: undefined });
+  // Return the account that was just changed — never an arbitrary first page row.
+  const { items } = await listUsers({ userId: input.userId, limit: 1, offset: 0 });
   const found = items.find((user) => user.id === input.userId);
-  if (found) return found;
-
-  const refreshed = await listUsers({ limit: 1, offset: 0 });
-  return refreshed.items[0]!;
+  if (!found) {
+    throw apiError("NOT_FOUND", { message: "That account does not exist.", details: { userId: input.userId } });
+  }
+  return found;
 }
 
 // --- payouts -----------------------------------------------------------------
