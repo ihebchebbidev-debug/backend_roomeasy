@@ -31,7 +31,7 @@ export type PropertyDto = {
   tags: string[];
   image: string | null;
   gallery: string[];
-  host: { id: string | null; name: string | null; since: number | null; superhost: boolean } | null;
+  host: { id: string | null; name: string | null; avatarUrl: string | null; since: number | null; superhost: boolean } | null;
   listing: {
     id: string;
     status: string;
@@ -77,6 +77,7 @@ type PropertyRow = {
   photos: string[] | null;
   host_id: string | null;
   host_name: string | null;
+  host_avatar: string | null;
   hosting_since: number | null;
   host_superhost: boolean | null;
   listing_id: string | null;
@@ -134,6 +135,7 @@ export function mapProperty(row: PropertyRow): PropertyDto {
       ? {
           id: row.host_id,
           name: row.host_name,
+           avatarUrl: row.host_avatar,
           since: row.hosting_since,
           superhost: row.host_superhost === true,
         }
@@ -161,6 +163,7 @@ export function mapProperty(row: PropertyRow): PropertyDto {
 const selectProperty = (localeParam: string) => `
   SELECT p.*,
          h.display_name AS host_name,
+          hu.avatar_url AS host_avatar,
          h.hosting_since,
          h.superhost   AS host_superhost,
          l.id      AS listing_id,
@@ -175,6 +178,7 @@ const selectProperty = (localeParam: string) => `
          (SELECT array_agg(tag ORDER BY tag) FROM property_tag WHERE property_id = p.id) AS tags
     FROM property p
     LEFT JOIN host_profile h ON h.user_id = p.host_id
+    LEFT JOIN app_user hu ON hu.id = p.host_id
     LEFT JOIN listing l ON l.property_id = p.id
     LEFT JOIN property_translation t ON t.property_id = p.id AND t.locale = ${localeParam}
 `;

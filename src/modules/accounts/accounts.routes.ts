@@ -11,12 +11,15 @@ import {
   changePassword,
   createAccount,
   createPasswordResetToken,
+  findAvatar,
   findAccountById,
   grantRole,
   recordCookieConsent,
   findAccountByEmail,
   resetPasswordForDev,
   resetPasswordWithToken,
+  removeAvatar,
+  saveAvatar,
   trustBadgesFor,
   updateProfile,
   verifyCredentials,
@@ -42,12 +45,32 @@ const profileSchema = z
   .object({
     fullName: z.string().trim().min(2).max(120).optional(),
     phone: z.string().trim().max(40).nullable().optional(),
-    avatarUrl: z.string().trim().url("Enter a valid image URL.").max(500).nullable().optional(),
     locale: z.enum(["en", "fr", "es", "de", "pt"]).optional(),
     currency: z.string().trim().length(3).optional(),
     twoFactorEnabled: z.boolean().optional(),
   })
   .refine((value) => Object.keys(value).length > 0, "Send at least one field to change.");
+
+const avatarSchema = z.object({
+  dataUrl: z.string().max(2_800_000, "The profile photo is too large."),
+});
+
+function decodeAvatar(dataUrl: string) {
+  const match = /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=]+)$/.exec(dataUrl);
+  if (!match) throw apiError("UNSUPPORTED_MEDIA_TYPE", { message: "Choose a JPEG, PNG, or WebP image." });
+  const contentType = match[1] as "image/jpeg" | "image/png" | "image/webp";
+  const content = Buffer.from(match[2] ?? "", "base64");
+  if (!content.length || content.length > 2 * 1024 * 1024) {
+    throw apiError("PAYLOAD_TOO_LARGE", { message: "Keep the profile photo under 2 MB." });
+  }
+  const valid = contentType === "image/jpeg"
+    ? content[0] === 0xff && content[1] === 0xd8
+    : contentType === "image/png"
+      ? content.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
+      : content.subarray(0, 4).toString("ascii") === "RIFF" && content.subarray(8, 12).toString("ascii") === "WEBP";
+  if (!valid) throw apiError("UNSUPPORTED_MEDIA_TYPE", { message: "The selected file is not a valid image." });
+  return { content, contentType };
+}
 
 function session(account: AccountDto) {
   return {
@@ -121,6 +144,35 @@ accountsRouter.patch(
     const patch = validateBody(profileSchema, req);
     const account = await updateProfile(currentUser(req).userId, patch);
     return ok(res, account);
+  }),
+);
+
+accountsRouter.put(
+  "/me/avatar",
+  requireAuth,
+  rateLimit({ windowMs: 60_000, max: 10, name: "avatar-upload" }),
+  asyncHandler(async (req, res) => {
+    const { dataUrl } = validateBody(avatarSchema, req);
+    return ok(res, await saveAvatar(currentUser(req).userId, decodeAvatar(dataUrl)));
+  }),
+);
+
+accountsRouter.delete(
+  "/me/avatar",
+  requireAuth,
+  asyncHandler(async (req, res) => ok(res, await removeAvatar(currentUser(req).userId))),
+);
+
+accountsRouter.get(
+  "/:userId/avatar",
+  asyncHandler(async (req, res) => {
+    const userId = z.string().uuid().parse(req.params["userId"]);
+    const avatar = await findAvatar(userId);
+    if (!avatar) throw apiError("NOT_FOUND", { message: "This account has no profile photo." });
+    res.setHeader("Content-Type", avatar.contentType);
+    res.setHeader("Cache-Control", "public, max-age=3600, stale-while-revalidate=86400");
+    res.setHeader("ETag", `W/\"${avatar.updatedAt.getTime()}-${avatar.content.length}\"`);
+    return res.status(200).send(avatar.content);
   }),
 );
 

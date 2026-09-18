@@ -24,6 +24,7 @@ export type ThreadSummaryDto = {
   propertyId: string | null;
   bookingId: string | null;
   withName: string;
+  withAvatar: string | null;
   closed: boolean;
   unread: number;
   lastMessage: string | null;
@@ -43,6 +44,8 @@ type ThreadRow = {
   last_message_at: Date | null;
   guest_name: string | null;
   host_name: string | null;
+  guest_avatar: string | null;
+  host_avatar: string | null;
   unread: string | null;
   last_body: string | null;
 };
@@ -66,12 +69,19 @@ function counterpartName(row: ThreadRow, viewerId: string): string {
   return row.with_name || row.guest_name || row.host_name || "Conversation";
 }
 
+function counterpartAvatar(row: ThreadRow, viewerId: string): string | null {
+  if (row.host_id === viewerId) return row.guest_avatar;
+  if (row.guest_id === viewerId) return row.host_avatar;
+  return null;
+}
+
 function mapThread(row: ThreadRow, viewerId: string): ThreadSummaryDto {
   return {
     id: row.id,
     propertyId: row.property_id,
     bookingId: row.booking_id,
     withName: counterpartName(row, viewerId),
+    withAvatar: counterpartAvatar(row, viewerId),
     closed: row.closed,
     unread: Number(row.unread ?? 0),
     lastMessage: row.last_body,
@@ -94,7 +104,9 @@ function mapMessage(row: MessageRow, viewerId: string): MessageDto {
 const THREAD_SELECT = `
   SELECT t.id, t.property_id, t.booking_id, t.guest_id, t.host_id, t.with_name, t.closed, t.last_message_at,
          gu.full_name AS guest_name,
+         gu.avatar_url AS guest_avatar,
          coalesce(hp.display_name, hu.full_name) AS host_name,
+         hu.avatar_url AS host_avatar,
          (SELECT count(*) FROM message m
            WHERE m.thread_id = t.id AND m.read_at IS NULL AND (m.sender_id IS NULL OR m.sender_id <> $1)) AS unread,
          (SELECT m.body FROM message m WHERE m.thread_id = t.id ORDER BY m.sent_at DESC LIMIT 1) AS last_body

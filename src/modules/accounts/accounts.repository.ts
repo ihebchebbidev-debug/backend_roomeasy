@@ -238,6 +238,47 @@ export async function updateProfile(
   return account;
 }
 
+export type AvatarFile = { content: Buffer; contentType: "image/jpeg" | "image/png" | "image/webp"; updatedAt: Date };
+
+export async function saveAvatar(userId: string, file: Omit<AvatarFile, "updatedAt">): Promise<AccountDto> {
+  await transaction(async (client) => {
+    await query(
+      `INSERT INTO user_avatar (user_id, content, content_type, byte_size)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (user_id) DO UPDATE SET
+         content = excluded.content, content_type = excluded.content_type,
+         byte_size = excluded.byte_size, updated_at = now()`,
+      [userId, file.content, file.contentType, file.content.length],
+      { client, label: "accounts.saveAvatar" },
+    );
+    await query(`UPDATE app_user SET avatar_url = $2 WHERE id = $1`, [userId, `/api/accounts/${userId}/avatar`], {
+      client,
+      label: "accounts.linkAvatar",
+    });
+  }, "accounts.saveAvatar");
+  const account = await findAccountById(userId);
+  if (!account) throw apiError("NOT_FOUND", { message: "This account no longer exists." });
+  return account;
+}
+
+export async function removeAvatar(userId: string): Promise<AccountDto> {
+  await transaction(async (client) => {
+    await query(`DELETE FROM user_avatar WHERE user_id = $1`, [userId], { client, label: "accounts.deleteAvatar" });
+    await query(`UPDATE app_user SET avatar_url = NULL WHERE id = $1`, [userId], { client, label: "accounts.unlinkAvatar" });
+  }, "accounts.removeAvatar");
+  const account = await findAccountById(userId);
+  if (!account) throw apiError("NOT_FOUND", { message: "This account no longer exists." });
+  return account;
+}
+
+export async function findAvatar(userId: string): Promise<AvatarFile | null> {
+  return queryOne<AvatarFile>(
+    `SELECT content, content_type AS "contentType", updated_at AS "updatedAt" FROM user_avatar WHERE user_id = $1`,
+    [userId],
+    { label: "accounts.findAvatar" },
+  );
+}
+
 export async function changePassword(userId: string, currentPassword: string, nextPassword: string): Promise<void> {
   const row = await queryOne<{ password_hash: string | null }>(`SELECT password_hash FROM app_user WHERE id = $1`, [
     userId,

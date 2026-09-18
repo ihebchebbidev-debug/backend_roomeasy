@@ -51,6 +51,21 @@ export const accountTables: TableDef[] = [
   },
 
   {
+    name: "user_avatar",
+    comment: "The current processed profile photo for an account.",
+    primaryKey: ["user_id"],
+    touchUpdatedAt: true,
+    columns: [
+      { name: "user_id", type: "uuid", notNull: true, references: "app_user(id) ON DELETE CASCADE" },
+      { name: "content", type: "bytea", notNull: true },
+      { name: "content_type", type: "text", notNull: true, check: "content_type IN ('image/jpeg', 'image/png', 'image/webp')" },
+      { name: "byte_size", type: "integer", notNull: true, check: "byte_size > 0 AND byte_size <= 2097152" },
+      { name: "created_at", type: "timestamptz", notNull: true, default: "now()" },
+      { name: "updated_at", type: "timestamptz", notNull: true, default: "now()" },
+    ],
+  },
+
+  {
     name: "password_reset_token",
     comment: "Backend addition: powers the forgot-password screen.",
     primaryKey: ["id"],
