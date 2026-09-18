@@ -21,6 +21,11 @@ export const accountTables: TableDef[] = [
       { name: "verified", type: "boolean", notNull: true, default: "false" },
       { name: "suspended", type: "boolean", notNull: true, default: "false" },
       { name: "suspended_reason", type: "text", note: "Shown to admins in the users tab." },
+      {
+        name: "suspended_until",
+        type: "timestamptz",
+        note: "End of a temporary suspension. NULL means the suspension is permanent until an admin lifts it.",
+      },
       { name: "banned", type: "boolean", notNull: true, default: "false", note: "Hard ban: the account can never sign in again." },
       { name: "banned_reason", type: "text" },
       { name: "banned_at", type: "timestamptz" },

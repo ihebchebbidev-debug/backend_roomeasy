@@ -6,7 +6,7 @@ import { asyncHandler, created, ok } from "@/core/http.js";
 import { validateBody, validateParams, validateQuery } from "@/core/validate.js";
 import { currentUser } from "@/middleware/auth.js";
 import { requireCapability } from "@/middleware/permissions.js";
-import { adminReports, setListingSuspended } from "@/modules/admin/admin.repository.js";
+import { adminInsights, adminReports, setListingSuspended, setUserSuspended } from "@/modules/admin/admin.repository.js";
 import { recordModeration } from "@/modules/admin/moderation.repository.js";
 import { listNotifications, notificationCounts, queueNotification } from "@/modules/admin/notifications.repository.js";
 import {
@@ -20,6 +20,12 @@ import {
   setUserBanned,
   setVerification,
 } from "@/modules/admin/operations.repository.js";
+import {
+  accountingExport,
+  bookingInvoice,
+  commissionReport,
+  financeLedger,
+} from "@/modules/admin/finance.repository.js";
 import { dispatchQueuedEmails, requeueNotification } from "@/modules/notifications/dispatcher.js";
 import { mailerStatus, verifyMailer } from "@/modules/notifications/mailer.js";
 import { stripeStatus } from "@/modules/payments/stripe.client.js";
@@ -407,7 +413,7 @@ adminOperationsRouter.get(
   asyncHandler(async (req, res) => {
     const input = validateQuery(
       pagination.extend({
-        status: z.enum(["open", "pending", "resolved", "closed", "all"]).default("open"),
+        status: z.enum(["open", "pending", "awaiting_reply", "escalated", "resolved", "closed", "all"]).default("open"),
         category: z.enum(["booking", "payment", "listing", "account", "dispute", "other"]).optional(),
         assignedTo: z.string().uuid().optional(),
         search: z.string().trim().max(120).optional(),
@@ -495,7 +501,7 @@ adminOperationsRouter.post(
     const { ticketId } = validateParams(uuidParam("ticketId"), req);
     const { status, resolution } = validateBody(
       z.object({
-        status: z.enum(["open", "pending", "resolved", "closed"]),
+        status: z.enum(["open", "pending", "awaiting_reply", "escalated", "resolved", "closed"]),
         resolution: z.string().trim().max(600).optional(),
       }),
       req,
@@ -511,6 +517,101 @@ adminOperationsRouter.post(
       metadata: { status },
     });
     return ok(res, ticket);
+  }),
+);
+
+/**
+ * One-click actions from a ticket, as the specification asks: cancel the stay
+ * with a refund, refund an amount, or suspend the member. The outcome is written
+ * back into the conversation so the desk keeps a full trace.
+ */
+adminOperationsRouter.post(
+  "/tickets/:ticketId/action",
+  requireCapability("support.manage"),
+  asyncHandler(async (req, res) => {
+    const { ticketId } = validateParams(uuidParam("ticketId"), req);
+    const input = validateBody(
+      z.discriminatedUnion("action", [
+        z.object({
+          action: z.literal("cancel_booking"),
+          reason: z.string().trim().min(3).max(600),
+          refundPercent: z.coerce.number().min(0).max(100).default(100),
+        }),
+        z.object({
+          action: z.literal("refund_booking"),
+          reason: z.string().trim().min(3).max(600),
+          amountUsd: z.coerce.number().positive(),
+        }),
+        z.object({
+          action: z.literal("suspend_member"),
+          reason: z.string().trim().min(3).max(600),
+          days: z.coerce.number().int().min(1).max(365).nullable().default(null),
+        }),
+      ]),
+      req,
+    );
+    const admin = currentUser(req);
+    const ticket = await getTicket(ticketId);
+
+    let note: string;
+    if (input.action === "suspend_member") {
+      if (!ticket.openedById) {
+        throw apiError("VALIDATION_FAILED", { message: "This ticket is not linked to a member account." });
+      }
+      const until = input.days
+        ? new Date(Date.now() + input.days * 24 * 60 * 60 * 1000).toISOString()
+        : null;
+      await setUserSuspended({
+        userId: ticket.openedById,
+        suspended: true,
+        reason: input.reason,
+        until,
+        actingAdminId: admin.userId,
+      });
+      note = until
+        ? `Account suspended until ${until.slice(0, 10)} — ${input.reason}`
+        : `Account suspended — ${input.reason}`;
+    } else {
+      if (!ticket.bookingId) {
+        throw apiError("VALIDATION_FAILED", { message: "This ticket is not linked to a reservation." });
+      }
+      if (input.action === "cancel_booking") {
+        const result = await adminCancelBooking({
+          bookingId: ticket.bookingId,
+          reason: input.reason,
+          refundPercent: input.refundPercent,
+          adminId: admin.userId,
+        });
+        note = `Reservation cancelled, ${result.refundUsd} USD refunded — ${input.reason}`;
+      } else {
+        await refundBooking({
+          bookingId: ticket.bookingId,
+          amountUsd: input.amountUsd,
+          reason: input.reason,
+          adminId: admin.userId,
+        });
+        note = `Refund of ${input.amountUsd} USD issued — ${input.reason}`;
+      }
+    }
+
+    await addTicketMessage({
+      ticketId,
+      authorId: admin.userId,
+      authorName: admin.email,
+      authorRole: "system",
+      body: note,
+      internalNote: false,
+    });
+    await recordModeration({
+      adminId: admin.userId,
+      action: "ticket_action_taken",
+      targetKind: "ticket",
+      targetId: ticketId,
+      reason: input.reason,
+      metadata: { action: input.action },
+    });
+
+    return ok(res, await getTicket(ticketId));
   }),
 );
 
@@ -565,26 +666,139 @@ adminOperationsRouter.get(
   }),
 );
 
+/** Occupancy, average basket, signup curve, top destinations, seasonality. */
+adminOperationsRouter.get(
+  "/stats/insights",
+  requireCapability("stats.read"),
+  asyncHandler(async (req, res) => {
+    const { months } = validateQuery(z.object({ months: z.coerce.number().int().min(1).max(36).default(12) }), req);
+    return ok(res, await adminInsights(months));
+  }),
+);
+
 adminOperationsRouter.get(
   "/stats/export.csv",
   requireCapability("stats.read"),
   asyncHandler(async (req, res) => {
     const { months } = validateQuery(z.object({ months: z.coerce.number().int().min(1).max(36).default(12) }), req);
-    const reports = await adminReports(months);
+    const [reports, insights] = await Promise.all([adminReports(months), adminInsights(months)]);
+    const cell = (value: string) => `"${value.replace(/"/g, '""')}"`;
     const lines = [
-      "section,label,bookings,revenue_usd,commission_usd",
-      ...reports.monthly.map((row) => `monthly,${row.month},${row.bookings},${row.revenueUsd},${row.commissionUsd}`),
-      ...reports.topListings.map(
-        (row) => `listing,"${row.name.replace(/"/g, '""')}",${row.bookings},${row.revenueUsd},`,
+      "section,label,bookings,revenue_usd,commission_usd,nights,extra",
+      ...reports.monthly.map(
+        (row) => `monthly,${row.month},${row.bookings},${row.revenueUsd},${row.commissionUsd},,`,
       ),
-      ...reports.topHosts.map((row) => `host,"${row.hostName.replace(/"/g, '""')}",${row.listings},${row.revenueUsd},`),
-      ...reports.cancellations.map(
-        (row) => `cancellation,"${row.reason.replace(/"/g, '""')}",${row.count},${row.refundedUsd},`,
+      ...reports.topListings.map((row) => `listing,${cell(row.name)},${row.bookings},${row.revenueUsd},,,`),
+      ...reports.topHosts.map((row) => `host,${cell(row.hostName)},${row.listings},${row.revenueUsd},,,`),
+      ...reports.cancellations.map((row) => `cancellation,${cell(row.reason)},${row.count},${row.refundedUsd},,,`),
+      `summary,occupancy_rate_percent,,,,${insights.occupancy.nightsBooked},${insights.occupancy.rate}`,
+      `summary,average_basket_usd,${insights.basketBookings},${insights.averageBasketUsd},,,`,
+      ...insights.monthlyOccupancy.map(
+        (row) => `occupancy,${row.month},,,,${row.nightsBooked},${row.rate}`,
+      ),
+      ...insights.signups.map((row) => `signups,${row.month},${row.total},,,,hosts=${row.hosts} guests=${row.guests}`),
+      ...insights.topDestinations.map(
+        (row) => `destination,${cell(`${row.city}, ${row.country}`)},${row.bookings},${row.revenueUsd},,${row.nights},`,
+      ),
+      ...insights.seasonality.map(
+        (row) => `seasonality,${row.label},${row.bookings},${row.revenueUsd},,${row.nights},`,
       ),
     ];
     res.setHeader("Content-Type", "text/csv; charset=utf-8");
     res.setHeader("Content-Disposition", `attachment; filename="roomeasy-statistics-${months}m.csv"`);
-    return res.status(200).send(lines.join("\n"));
+    // The byte-order mark makes Excel open the file as UTF-8 without a prompt.
+    return res.status(200).send(`\uFEFF${lines.join("\r\n")}`);
+  }),
+);
+
+// --- finance: ledger, commission report, accounting export, invoices ---------
+
+const dateRange = z.object({
+  from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+});
+
+/** One row per booking with the payment state, commission and host net. */
+adminOperationsRouter.get(
+  "/finance/ledger",
+  requireCapability("finance.read"),
+  asyncHandler(async (req, res) => {
+    const input = validateQuery(
+      pagination.extend(dateRange.shape).extend({
+        hostId: z.string().uuid().optional(),
+        paymentStatus: z.enum(["all", "none", "pending", "authorized", "paid", "failed", "refunded"]).default("all"),
+      }),
+      req,
+    );
+    return ok(res, await financeLedger(input));
+  }),
+);
+
+/** Commission owed per host over the chosen period. */
+adminOperationsRouter.get(
+  "/finance/commission-report",
+  requireCapability("finance.read"),
+  asyncHandler(async (req, res) => {
+    const input = validateQuery(dateRange, req);
+    return ok(res, await commissionReport(input));
+  }),
+);
+
+/** Accounting totals grouped by month, quarter or year. */
+adminOperationsRouter.get(
+  "/finance/accounting",
+  requireCapability("finance.read"),
+  asyncHandler(async (req, res) => {
+    const input = validateQuery(
+      dateRange.extend({ period: z.enum(["month", "quarter", "year"]).default("month") }),
+      req,
+    );
+    return ok(res, await accountingExport(input));
+  }),
+);
+
+/** The same accounting totals as a spreadsheet file. */
+adminOperationsRouter.get(
+  "/finance/accounting.csv",
+  requireCapability("finance.read"),
+  asyncHandler(async (req, res) => {
+    const input = validateQuery(
+      dateRange.extend({ period: z.enum(["month", "quarter", "year"]).default("month") }),
+      req,
+    );
+    const rows = await accountingExport(input);
+    const lines = [
+      "period,bookings,revenue_usd,commission_usd,host_net_usd,service_fee_usd,taxes_usd,cleaning_usd,refunded_usd,paid_usd",
+      ...rows.map((r) =>
+        [
+          r.period,
+          r.bookings,
+          r.revenueUsd,
+          r.commissionUsd,
+          r.hostNetUsd,
+          r.serviceFeeUsd,
+          r.taxesUsd,
+          r.cleaningUsd,
+          r.refundedUsd,
+          r.paidUsd,
+        ].join(","),
+      ),
+    ];
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="roomeasy-accounting-${input.period}.csv"`);
+    return res.status(200).send(`\uFEFF${lines.join("\r\n")}`);
+  }),
+);
+
+/** Everything needed to print the invoice of one booking. */
+adminOperationsRouter.get(
+  "/finance/invoice/:bookingId",
+  requireCapability("finance.read"),
+  asyncHandler(async (req, res) => {
+    const { bookingId } = validateParams(z.object({ bookingId: z.string().trim().min(3).max(140) }), req);
+    const invoice = await bookingInvoice(bookingId);
+    if (!invoice) throw apiError("NOT_FOUND", { message: "That reservation does not exist." });
+    return ok(res, invoice);
   }),
 );
 

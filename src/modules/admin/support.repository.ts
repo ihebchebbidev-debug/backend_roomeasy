@@ -1,7 +1,7 @@
 import { apiError } from "@/core/errors.js";
 import { query, queryOne } from "@/db/query.js";
 
-export type TicketStatus = "open" | "pending" | "resolved" | "closed";
+export type TicketStatus = "open" | "pending" | "awaiting_reply" | "escalated" | "resolved" | "closed";
 export type TicketPriority = "low" | "normal" | "high" | "urgent";
 export type TicketCategory = "booking" | "payment" | "listing" | "account" | "dispute" | "other";
 
@@ -174,7 +174,7 @@ export async function listTickets(options: {
 
   const totals = await queryOne<{ total: string; open: string }>(
     `SELECT count(*)::text AS total,
-            count(*) FILTER (WHERE status IN ('open', 'pending'))::text AS open
+            count(*) FILTER (WHERE status IN ('open', 'pending', 'awaiting_reply', 'escalated'))::text AS open
        FROM support_ticket
       WHERE ($1::ticket_status IS NULL OR status = $1::ticket_status)`,
     [status],
@@ -201,12 +201,20 @@ export async function addTicketMessage(input: {
   );
   if (!row) throw apiError("NOT_FOUND", { message: "That ticket does not exist." });
 
+  // An answer from the desk puts the ticket in "awaiting reply"; an answer from
+  // the guest or host brings it back to the queue, even if it was closed.
   await query(
     `UPDATE support_ticket
         SET last_activity_at = now(),
-            status = CASE WHEN status IN ('resolved', 'closed') THEN 'open'::ticket_status ELSE status END
+            status = CASE
+                       WHEN $2 THEN status
+                       WHEN $3 = 'admin' AND status <> 'escalated' THEN 'awaiting_reply'::ticket_status
+                       WHEN $3 IN ('guest', 'host') AND status IN ('resolved', 'closed', 'awaiting_reply')
+                         THEN 'open'::ticket_status
+                       ELSE status
+                     END
       WHERE id = $1`,
-    [input.ticketId],
+    [input.ticketId, input.internalNote ?? false, input.authorRole],
     { label: "support.touchTicket" },
   );
   return row.id;

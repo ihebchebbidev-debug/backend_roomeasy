@@ -25,6 +25,7 @@ export type ModerationAction =
   | "booking_modified"
   | "ticket_assigned"
   | "ticket_status_changed"
+  | "ticket_action_taken"
   | "commission_updated";
 
 /** Append-only audit trail for every privileged action. */

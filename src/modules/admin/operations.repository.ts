@@ -296,14 +296,45 @@ export async function setUserBanned(input: {
             -- Lifting a ban also lifts the suspension it caused, so the member
             -- can sign in again straight away.
             suspended = CASE WHEN $2 THEN true ELSE false END,
-            suspended_reason = CASE WHEN $2 THEN coalesce($3, suspended_reason) ELSE NULL END
+            suspended_reason = CASE WHEN $2 THEN coalesce($3, suspended_reason) ELSE NULL END,
+            -- A ban never expires on its own, so it carries no end date.
+            suspended_until = NULL
       WHERE id = $1
       RETURNING id, email, full_name, banned`,
     [input.userId, input.banned, input.reason ?? null],
     { label: "adminOps.setBanned" },
   );
   if (!row) throw apiError("NOT_FOUND", { message: "That account does not exist." });
-  return { userId: row.id, email: row.email, fullName: row.full_name, banned: row.banned };
+
+  // Banning a host takes every live listing offline; lifting the ban puts the
+  // approved ones back. Listings the host had left as drafts stay drafts.
+  const affected = input.banned
+    ? await query<{ id: string }>(
+        `UPDATE listing l
+            SET status = 'suspended', updated_at = now()
+           FROM property p
+          WHERE p.id = l.property_id AND p.host_id = $1 AND l.status = 'published'
+        RETURNING l.id`,
+        [input.userId],
+        { label: "adminOps.banUnpublishListings" },
+      )
+    : await query<{ id: string }>(
+        `UPDATE listing l
+            SET status = 'published', updated_at = now()
+           FROM property p
+          WHERE p.id = l.property_id AND p.host_id = $1 AND l.status = 'suspended' AND l.approved
+        RETURNING l.id`,
+        [input.userId],
+        { label: "adminOps.unbanRestoreListings" },
+      );
+
+  return {
+    userId: row.id,
+    email: row.email,
+    fullName: row.full_name,
+    banned: row.banned,
+    listingsAffected: affected.length,
+  };
 }
 
 // --- per-host commission ------------------------------------------------------

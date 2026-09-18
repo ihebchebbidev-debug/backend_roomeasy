@@ -19,6 +19,7 @@ import {
   grantRole,
   recordCookieConsent,
   findAccountByEmail,
+  submitIdentityDocument,
   resetPasswordForDev,
   resetPasswordWithToken,
   removeAvatar,
@@ -194,13 +195,37 @@ accountsRouter.post(
   }),
 );
 
-/** "Become a host" — adds the host role and the public host profile. */
+/**
+ * "Become a host" — adds the host role and the public host profile. An identity
+ * document is mandatory at this point (spec): it is filed as a pending check
+ * for the back office to verify.
+ */
 accountsRouter.post(
   "/me/become-host",
   requireAuth,
   asyncHandler(async (req, res) => {
-    const body = validateBody(z.object({ displayName: z.string().trim().min(2).max(120).optional() }), req);
-    const account = await grantRole(currentUser(req).userId, "host", body.displayName);
+    const body = validateBody(
+      z.object({
+        displayName: z.string().trim().min(2).max(120).optional(),
+        documentKind: z.enum(["passport", "id_card", "driving_licence", "residence_permit"], {
+          message: "Choose the kind of identity document you are providing.",
+        }),
+        documentReference: z
+          .string()
+          .trim()
+          .min(4, "Enter the number shown on your identity document.")
+          .max(80),
+      }),
+      req,
+    );
+    const userId = currentUser(req).userId;
+    const account = await grantRole(userId, "host", body.displayName);
+    await submitIdentityDocument({
+      userId,
+      documentKind: body.documentKind,
+      documentReference: body.documentReference,
+    });
+    req.log.info({ userId, documentKind: body.documentKind }, "host identity document filed");
     return ok(res, account);
   }),
 );

@@ -353,3 +353,67 @@ export async function unreadCount(viewerId: string): Promise<number> {
   );
   return Number(row?.unread ?? 0);
 }
+
+/**
+ * Read-only view of the traveller-host conversation attached to a booking, for
+ * the back office. Falls back to the thread that links the same guest and the
+ * same listing when no thread was anchored to the booking itself.
+ */
+export type BookingConversationDto = {
+  threadId: string | null;
+  guestName: string | null;
+  hostName: string | null;
+  messages: { id: string; senderRole: "guest" | "host" | "admin" | "system"; senderName: string | null; text: string; sentAt: string }[];
+};
+
+export async function bookingConversation(bookingId: string): Promise<BookingConversationDto> {
+  const thread = await queryOne<{
+    id: string;
+    guest_name: string | null;
+    host_name: string | null;
+  }>(
+    `SELECT t.id, gu.full_name AS guest_name, coalesce(hp.display_name, hu.full_name) AS host_name
+       FROM message_thread t
+       LEFT JOIN app_user gu ON gu.id = t.guest_id
+       LEFT JOIN app_user hu ON hu.id = t.host_id
+       LEFT JOIN host_profile hp ON hp.user_id = t.host_id
+      WHERE t.booking_id = $1
+         OR (t.property_id = (SELECT property_id FROM booking WHERE id = $1)
+             AND t.guest_id = (SELECT guest_id FROM booking WHERE id = $1))
+      ORDER BY (t.booking_id = $1) DESC, t.last_message_at DESC NULLS LAST
+      LIMIT 1`,
+    [bookingId],
+    { label: "messaging.bookingConversation" },
+  );
+
+  if (!thread) return { threadId: null, guestName: null, hostName: null, messages: [] };
+
+  const rows = await query<{
+    id: string;
+    sender_role: "guest" | "host" | "admin" | "system";
+    sender_name: string | null;
+    body: string;
+    sent_at: Date;
+  }>(
+    `SELECT m.id::text, m.sender_role, u.full_name AS sender_name, m.body, m.sent_at
+       FROM message m
+       LEFT JOIN app_user u ON u.id = m.sender_id
+      WHERE m.thread_id = $1
+      ORDER BY m.sent_at, m.id`,
+    [thread.id],
+    { label: "messaging.bookingConversationMessages" },
+  );
+
+  return {
+    threadId: thread.id,
+    guestName: thread.guest_name,
+    hostName: thread.host_name,
+    messages: rows.map((row) => ({
+      id: row.id,
+      senderRole: row.sender_role,
+      senderName: row.sender_name,
+      text: row.body,
+      sentAt: row.sent_at.toISOString(),
+    })),
+  };
+}

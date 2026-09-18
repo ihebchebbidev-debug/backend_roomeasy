@@ -311,6 +311,9 @@ export type AdminUserRow = {
   verified: boolean;
   suspended: boolean;
   suspendedReason: string | null;
+  /** End of a temporary suspension; null when the suspension has no end date. */
+  suspendedUntil: string | null;
+  banned: boolean;
   joinedOn: string;
   lastLoginAt: string | null;
   bookings: number;
@@ -326,6 +329,8 @@ export async function listUsers(options: {
   limit: number;
   offset: number;
 }): Promise<{ items: AdminUserRow[]; total: number }> {
+  await liftExpiredSuspensions();
+
   const values: unknown[] = [];
   const where: string[] = [];
 
@@ -334,8 +339,17 @@ export async function listUsers(options: {
     where.push(`u.id = $${values.length}`);
   }
   if (options.search?.trim()) {
-    values.push(`%${options.search.trim()}%`);
-    where.push(`(u.full_name ILIKE $${values.length} OR u.email ILIKE $${values.length})`);
+    // Phone numbers are searched digit-only, so "+216 55 123" also finds "21655123".
+    const term = options.search.trim();
+    values.push(`%${term}%`);
+    const like = `$${values.length}`;
+    values.push(`%${term.replace(/\D+/g, "")}%`);
+    const digits = `$${values.length}`;
+    where.push(
+      `(u.full_name ILIKE ${like} OR u.email ILIKE ${like}` +
+        ` OR (u.phone IS NOT NULL AND (u.phone ILIKE ${like}` +
+        ` OR (${digits} <> '%%' AND regexp_replace(u.phone, '\\D', '', 'g') ILIKE ${digits}))))`,
+    );
   }
   if (options.role) {
     values.push(options.role);
@@ -361,12 +375,15 @@ export async function listUsers(options: {
     verified: boolean;
     suspended: boolean;
     suspended_reason: string | null;
+    suspended_until: Date | null;
+    banned: boolean;
     joined_on: Date;
     last_login_at: Date | null;
     bookings: string;
     listings: string;
   }>(
     `SELECT u.id, u.full_name, u.email, u.phone, u.verified, u.suspended, u.suspended_reason,
+            u.suspended_until, u.banned,
             u.joined_on, u.last_login_at,
             (SELECT array_agg(g.role::text) FROM user_role_grant g WHERE g.user_id = u.id) AS roles,
             (SELECT count(*) FROM booking b WHERE b.guest_id = u.id) AS bookings,
@@ -393,6 +410,8 @@ export async function listUsers(options: {
       verified: row.verified,
       suspended: row.suspended,
       suspendedReason: row.suspended_reason,
+      suspendedUntil: row.suspended_until ? row.suspended_until.toISOString() : null,
+      banned: row.banned,
       joinedOn: row.joined_on.toISOString().slice(0, 10),
       lastLoginAt: row.last_login_at ? row.last_login_at.toISOString() : null,
       bookings: Number(row.bookings),
@@ -402,20 +421,45 @@ export async function listUsers(options: {
   };
 }
 
+/**
+ * Clears temporary suspensions whose end date has passed. Banned accounts stay
+ * suspended: their ban has no end date.
+ */
+export async function liftExpiredSuspensions(): Promise<number> {
+  const rows = await query<{ id: string }>(
+    `UPDATE app_user
+        SET suspended = false, suspended_reason = NULL, suspended_until = NULL, updated_at = now()
+      WHERE suspended AND NOT banned AND suspended_until IS NOT NULL AND suspended_until <= now()
+      RETURNING id`,
+    [],
+    { label: "admin.liftExpiredSuspensions" },
+  );
+  return rows.length;
+}
+
 /** Suspends or restores an account. An admin cannot suspend their own login. */
 export async function setUserSuspended(input: {
   userId: string;
   suspended: boolean;
   reason?: string | null;
+  /** ISO date/time the suspension lifts itself; null or omitted means no end date. */
+  until?: string | null;
   actingAdminId: string;
 }): Promise<AdminUserRow> {
   if (input.userId === input.actingAdminId && input.suspended) {
     throw apiError("CONFLICT", { message: "You cannot suspend your own administrator account." });
   }
 
+  const until = input.suspended && input.until ? new Date(input.until) : null;
+  if (until && (Number.isNaN(until.getTime()) || until.getTime() <= Date.now())) {
+    throw apiError("VALIDATION_FAILED", { message: "The end of the suspension must be a future date." });
+  }
+
   const rows = await query<{ id: string }>(
-    `UPDATE app_user SET suspended = $2, suspended_reason = $3, updated_at = now() WHERE id = $1 RETURNING id`,
-    [input.userId, input.suspended, input.suspended ? (input.reason ?? null) : null],
+    `UPDATE app_user
+        SET suspended = $2, suspended_reason = $3, suspended_until = $4, updated_at = now()
+      WHERE id = $1 RETURNING id`,
+    [input.userId, input.suspended, input.suspended ? (input.reason ?? null) : null, until],
     { label: "admin.setUserSuspended" },
   );
   if (!rows.length) {
@@ -429,6 +473,230 @@ export async function setUserSuspended(input: {
     throw apiError("NOT_FOUND", { message: "That account does not exist.", details: { userId: input.userId } });
   }
   return found;
+}
+
+// --- host profile ------------------------------------------------------------
+
+export type AdminHostProfile = {
+  host: AdminUserRow & {
+    displayName: string | null;
+    hostingSince: number | null;
+    superhost: boolean;
+    bannedReason: string | null;
+    commissionRate: number | null;
+    defaultCommissionRate: number;
+    verificationStatus: "none" | "pending" | "verified" | "rejected";
+  };
+  totals: {
+    listings: number;
+    publishedListings: number;
+    bookings: number;
+    completedBookings: number;
+    cancelledBookings: number;
+    grossRevenueUsd: number;
+    commissionUsd: number;
+    averageRating: number;
+    reviews: number;
+  };
+  listings: AdminListingRow[];
+  bookings: Array<{
+    id: string;
+    reference: string;
+    propertyId: string;
+    propertyName: string;
+    guestName: string;
+    checkIn: string;
+    checkOut: string;
+    status: string;
+    totalUsd: number;
+  }>;
+  reviews: Array<{
+    id: string;
+    propertyId: string;
+    propertyName: string;
+    authorName: string;
+    rating: number;
+    body: string;
+    hidden: boolean;
+    createdAt: string | null;
+  }>;
+  documents: Array<{
+    id: string;
+    status: string;
+    documentKind: string | null;
+    documentReference: string | null;
+    notes: string | null;
+    createdAt: string;
+    decidedAt: string | null;
+  }>;
+};
+
+/** Everything an admin needs about one host on a single screen. */
+export async function hostProfile(hostId: string): Promise<AdminHostProfile> {
+  const { items } = await listUsers({ userId: hostId, limit: 1, offset: 0 });
+  const account = items.find((user) => user.id === hostId);
+  if (!account) {
+    throw apiError("NOT_FOUND", { message: "That host does not exist.", details: { hostId } });
+  }
+
+  const extra = await queryOne<{
+    display_name: string | null;
+    hosting_since: number | null;
+    superhost: boolean | null;
+    banned_reason: string | null;
+    commission_rate: string | null;
+    default_rate: string | null;
+    verification_status: string | null;
+  }>(
+    `SELECT h.display_name, h.hosting_since, h.superhost, u.banned_reason,
+            c.commission_rate::text AS commission_rate,
+            (SELECT commission_rate FROM platform_settings WHERE id = true)::text AS default_rate,
+            (SELECT v.status::text FROM identity_verification v
+              WHERE v.user_id = u.id ORDER BY v.created_at DESC LIMIT 1) AS verification_status
+       FROM app_user u
+       LEFT JOIN host_profile h ON h.user_id = u.id
+       LEFT JOIN host_commission c ON c.host_id = u.id
+      WHERE u.id = $1`,
+    [hostId],
+    { label: "admin.hostProfile.account" },
+  );
+
+  const listingRows = await query<ListingRow>(
+    `SELECT l.id AS listing_id, l.property_id, p.name, p.city, p.country, p.category::text AS category,
+            p.host_id, hu.full_name AS host_name, l.status::text AS status, l.approved, l.rejected_reason,
+            l.nightly_usd, (SELECT count(*) FROM property_photo ph WHERE ph.property_id = p.id) AS photo_count,
+            l.created_at
+       FROM listing l
+       JOIN property p ON p.id = l.property_id
+       LEFT JOIN app_user hu ON hu.id = p.host_id
+      WHERE p.host_id = $1
+      ORDER BY l.created_at DESC
+      LIMIT 200`,
+    [hostId],
+    { label: "admin.hostProfile.listings" },
+  );
+
+  const bookingRows = await query<{
+    id: string;
+    reference: string;
+    property_id: string;
+    property_name: string;
+    guest_name: string;
+    check_in: Date;
+    check_out: Date;
+    status: string;
+    total_usd: string;
+    service_fee: string;
+  }>(
+    `SELECT b.id, b.reference, b.property_id, p.name AS property_name, b.guest_name,
+            b.check_in, b.check_out, b.status::text AS status, b.total_usd, b.service_fee
+       FROM booking b
+       JOIN property p ON p.id = b.property_id
+      WHERE p.host_id = $1
+      ORDER BY b.check_in DESC
+      LIMIT 200`,
+    [hostId],
+    { label: "admin.hostProfile.bookings" },
+  );
+
+  const reviewRows = await query<{
+    id: string;
+    property_id: string;
+    property_name: string;
+    author_name: string;
+    rating: number;
+    body: string;
+    hidden: boolean;
+    created_at: Date | null;
+  }>(
+    `SELECT r.id, r.property_id, p.name AS property_name, r.author_name, r.rating, r.body, r.hidden, r.created_at
+       FROM review r
+       JOIN property p ON p.id = r.property_id
+      WHERE p.host_id = $1
+      ORDER BY r.created_at DESC NULLS LAST
+      LIMIT 100`,
+    [hostId],
+    { label: "admin.hostProfile.reviews" },
+  );
+
+  const documentRows = await query<{
+    id: string;
+    status: string;
+    document_kind: string | null;
+    document_reference: string | null;
+    notes: string | null;
+    created_at: Date;
+    decided_at: Date | null;
+  }>(
+    `SELECT id, status::text AS status, document_kind, document_reference, notes, created_at, decided_at
+       FROM identity_verification
+      WHERE user_id = $1
+      ORDER BY created_at DESC
+      LIMIT 20`,
+    [hostId],
+    { label: "admin.hostProfile.documents" },
+  );
+
+  const earning = bookingRows.filter((row) => row.status === "confirmed" || row.status === "completed");
+  const visibleReviews = reviewRows.filter((row) => !row.hidden);
+  const ratingSum = visibleReviews.reduce((sum, row) => sum + row.rating, 0);
+
+  return {
+    host: {
+      ...account,
+      displayName: extra?.display_name ?? null,
+      hostingSince: extra?.hosting_since ?? null,
+      superhost: extra?.superhost ?? false,
+      bannedReason: extra?.banned_reason ?? null,
+      commissionRate: extra?.commission_rate === null || extra?.commission_rate === undefined
+        ? null
+        : Number(extra.commission_rate),
+      defaultCommissionRate: Number(extra?.default_rate ?? 0),
+      verificationStatus: (extra?.verification_status ?? "none") as "none" | "pending" | "verified" | "rejected",
+    },
+    totals: {
+      listings: listingRows.length,
+      publishedListings: listingRows.filter((row) => row.status === "published" && row.approved).length,
+      bookings: bookingRows.length,
+      completedBookings: bookingRows.filter((row) => row.status === "completed").length,
+      cancelledBookings: bookingRows.filter((row) => row.status === "cancelled" || row.status === "declined").length,
+      grossRevenueUsd: Number(earning.reduce((sum, row) => sum + Number(row.total_usd), 0).toFixed(2)),
+      commissionUsd: Number(earning.reduce((sum, row) => sum + Number(row.service_fee), 0).toFixed(2)),
+      averageRating: visibleReviews.length ? Number((ratingSum / visibleReviews.length).toFixed(2)) : 0,
+      reviews: reviewRows.length,
+    },
+    listings: listingRows.map(mapListing),
+    bookings: bookingRows.map((row) => ({
+      id: row.id,
+      reference: row.reference,
+      propertyId: row.property_id,
+      propertyName: row.property_name,
+      guestName: row.guest_name,
+      checkIn: row.check_in.toISOString().slice(0, 10),
+      checkOut: row.check_out.toISOString().slice(0, 10),
+      status: row.status,
+      totalUsd: Number(row.total_usd),
+    })),
+    reviews: reviewRows.map((row) => ({
+      id: row.id,
+      propertyId: row.property_id,
+      propertyName: row.property_name,
+      authorName: row.author_name,
+      rating: row.rating,
+      body: row.body,
+      hidden: row.hidden,
+      createdAt: row.created_at ? row.created_at.toISOString() : null,
+    })),
+    documents: documentRows.map((row) => ({
+      id: row.id,
+      status: row.status,
+      documentKind: row.document_kind,
+      documentReference: row.document_reference,
+      notes: row.notes,
+      createdAt: row.created_at.toISOString(),
+      decidedAt: row.decided_at ? row.decided_at.toISOString() : null,
+    })),
+  };
 }
 
 // --- payouts -----------------------------------------------------------------
@@ -689,5 +957,177 @@ export async function adminReports(months = 12): Promise<AdminReports> {
       count: Number(row.count),
       refundedUsd: Number(row.refunded),
     })),
+  };
+}
+
+// --- statistics: occupancy, average basket, signups, destinations, season ----
+
+export type AdminInsights = {
+  months: number;
+  occupancy: { rate: number; nightsBooked: number; nightsAvailable: number };
+  averageBasketUsd: number;
+  basketBookings: number;
+  monthlyOccupancy: { month: string; rate: number; nightsBooked: number; nightsAvailable: number }[];
+  signups: { month: string; total: number; hosts: number; guests: number }[];
+  topDestinations: { city: string; country: string; bookings: number; revenueUsd: number; nights: number }[];
+  seasonality: { month: number; label: string; bookings: number; nights: number; revenueUsd: number }[];
+};
+
+const MONTH_LABELS = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
+];
+
+/**
+ * The figures the specification asks for in the statistics tab. Everything is
+ * computed over the last `months` calendar months, apart from seasonality,
+ * which deliberately looks at the whole history to expose the yearly shape.
+ *
+ * Occupancy compares the nights actually sold with the nights that were on
+ * sale: a listing only counts for the months after it was approved, and a stay
+ * is clipped to the month it overlaps so a long booking is split correctly.
+ */
+export async function adminInsights(months = 12): Promise<AdminInsights> {
+  const occupancy = await query<{
+    month: string;
+    nights_booked: string;
+    nights_available: string;
+  }>(
+    `WITH span AS (
+        SELECT generate_series(
+                 date_trunc('month', now()) - make_interval(months => $1::int - 1),
+                 date_trunc('month', now()),
+                 interval '1 month')::date AS start
+      ), bounds AS (
+        SELECT start, (start + interval '1 month')::date AS stop FROM span
+      )
+      SELECT to_char(b.start, 'YYYY-MM') AS month,
+             coalesce((SELECT sum(least(bk.check_out, b.stop) - greatest(bk.check_in, b.start))
+                         FROM booking bk
+                        WHERE bk.status IN ('confirmed','completed')
+                          AND bk.check_in < b.stop AND bk.check_out > b.start), 0)::text AS nights_booked,
+             coalesce((SELECT sum(b.stop - greatest(b.start, date(l.created_at)))
+                         FROM listing l
+                        WHERE l.approved AND date(l.created_at) < b.stop), 0)::text AS nights_available
+        FROM bounds b
+       ORDER BY 1`,
+    [months],
+    { label: "admin.insights.occupancy" },
+  );
+
+  const basket = await queryOne<{ average: string | null; bookings: string }>(
+    `SELECT avg(total_usd) AS average, count(*) AS bookings
+       FROM booking
+      WHERE status IN ('confirmed','completed')
+        AND created_at >= date_trunc('month', now()) - make_interval(months => $1::int - 1)`,
+    [months],
+    { label: "admin.insights.basket" },
+  );
+
+  const signups = await query<{ month: string; total: string; hosts: string; guests: string }>(
+    `SELECT to_char(date_trunc('month', u.created_at), 'YYYY-MM') AS month,
+            count(*) AS total,
+            count(*) FILTER (WHERE EXISTS (SELECT 1 FROM user_role_grant g
+                                            WHERE g.user_id = u.id AND g.role = 'host')) AS hosts,
+            count(*) FILTER (WHERE NOT EXISTS (SELECT 1 FROM user_role_grant g
+                                                WHERE g.user_id = u.id AND g.role IN ('host','admin'))) AS guests
+       FROM app_user u
+      WHERE u.created_at >= date_trunc('month', now()) - make_interval(months => $1::int - 1)
+      GROUP BY 1 ORDER BY 1`,
+    [months],
+    { label: "admin.insights.signups" },
+  );
+
+  const destinations = await query<{
+    city: string;
+    country: string;
+    bookings: string;
+    revenue: string;
+    nights: string;
+  }>(
+    `SELECT p.city, p.country, count(b.id) AS bookings,
+            coalesce(sum(b.total_usd), 0) AS revenue,
+            coalesce(sum(b.nights), 0)::text AS nights
+       FROM booking b
+       JOIN property p ON p.id = b.property_id
+      WHERE b.status IN ('confirmed','completed')
+        AND b.created_at >= date_trunc('month', now()) - make_interval(months => $1::int - 1)
+      GROUP BY p.city, p.country
+      ORDER BY revenue DESC, bookings DESC
+      LIMIT 10`,
+    [months],
+    { label: "admin.insights.destinations" },
+  );
+
+  const seasonality = await query<{ month: string; bookings: string; nights: string; revenue: string }>(
+    `SELECT extract(month FROM check_in)::int::text AS month,
+            count(*) AS bookings,
+            coalesce(sum(nights), 0)::text AS nights,
+            coalesce(sum(total_usd), 0) AS revenue
+       FROM booking
+      WHERE status IN ('confirmed','completed')
+      GROUP BY 1 ORDER BY 1`,
+    [],
+    { label: "admin.insights.seasonality" },
+  );
+
+  const monthlyOccupancy = occupancy.map((row) => {
+    const booked = Number(row.nights_booked);
+    const available = Number(row.nights_available);
+    return {
+      month: row.month,
+      nightsBooked: booked,
+      nightsAvailable: available,
+      rate: available > 0 ? Number(((booked / available) * 100).toFixed(1)) : 0,
+    };
+  });
+  const bookedTotal = monthlyOccupancy.reduce((sum, row) => sum + row.nightsBooked, 0);
+  const availableTotal = monthlyOccupancy.reduce((sum, row) => sum + row.nightsAvailable, 0);
+
+  const seasonByMonth = new Map(seasonality.map((row) => [Number(row.month), row]));
+
+  return {
+    months,
+    occupancy: {
+      nightsBooked: bookedTotal,
+      nightsAvailable: availableTotal,
+      rate: availableTotal > 0 ? Number(((bookedTotal / availableTotal) * 100).toFixed(1)) : 0,
+    },
+    averageBasketUsd: basket?.average ? Number(Number(basket.average).toFixed(2)) : 0,
+    basketBookings: Number(basket?.bookings ?? 0),
+    monthlyOccupancy,
+    signups: signups.map((row) => ({
+      month: row.month,
+      total: Number(row.total),
+      hosts: Number(row.hosts),
+      guests: Number(row.guests),
+    })),
+    topDestinations: destinations.map((row) => ({
+      city: row.city,
+      country: row.country,
+      bookings: Number(row.bookings),
+      revenueUsd: Number(row.revenue),
+      nights: Number(row.nights),
+    })),
+    seasonality: MONTH_LABELS.map((label, index) => {
+      const row = seasonByMonth.get(index + 1);
+      return {
+        month: index + 1,
+        label,
+        bookings: Number(row?.bookings ?? 0),
+        nights: Number(row?.nights ?? 0),
+        revenueUsd: Number(row?.revenue ?? 0),
+      };
+    }),
   };
 }

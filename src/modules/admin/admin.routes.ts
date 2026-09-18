@@ -18,11 +18,18 @@ import {
   rejectListing,
   setListingSuspended,
   setUserSuspended,
+  hostProfile,
 } from "@/modules/admin/admin.repository.js";
+import {
+  LISTING_REJECTION_CODES,
+  LISTING_REJECTION_REASONS,
+  rejectionMessage,
+} from "@/modules/admin/rejectionReasons.js";
 import { listModerationLog, recordModeration } from "@/modules/admin/moderation.repository.js";
 import { adminOperationsRouter } from "@/modules/admin/operations.routes.js";
 import { grantRole, revokeRole } from "@/modules/accounts/accounts.repository.js";
 import { listAllBookings } from "@/modules/bookings/bookings.repository.js";
+import { bookingConversation } from "@/modules/messaging/messaging.repository.js";
 import { deleteReview, listAllReviews, setReviewHidden } from "@/modules/reviews/reviews.repository.js";
 
 export const adminRouter = Router();
@@ -112,10 +119,22 @@ adminRouter.post(
   requireCapability("listings.moderate"),
   asyncHandler(async (req, res) => {
     const { listingId } = validateParams(listingParams, req);
-    const { reason } = validateBody(
-      z.object({ reason: z.string().trim().min(5, "Tell the host why, in at least 5 characters.").max(600) }),
+    const body = validateBody(
+      z.object({
+        // Moderators pick a standard reason; free text only adds detail.
+        reasonCode: z.enum(LISTING_REJECTION_CODES).optional(),
+        details: z.string().trim().max(600).optional(),
+        reason: z.string().trim().min(5, "Tell the host why, in at least 5 characters.").max(600).optional(),
+      }),
       req,
     );
+    if (!body.reasonCode && !body.reason) {
+      throw apiError("VALIDATION_FAILED", { message: "Pick a refusal reason." });
+    }
+    if (body.reasonCode === "other" && !body.details) {
+      throw apiError("VALIDATION_FAILED", { message: "Explain the refusal when choosing \"Other\"." });
+    }
+    const reason = body.reasonCode ? rejectionMessage(body.reasonCode, body.details) : body.reason!;
     const listing = await rejectListing(listingId, reason);
     await recordModeration({
       adminId: currentUser(req).userId,
@@ -187,17 +206,38 @@ adminRouter.get(
   }),
 );
 
+/** The standard refusal reasons, so the back office and the API never drift apart. */
+adminRouter.get(
+  "/listing-rejection-reasons",
+  asyncHandler(async (_req, res) => ok(res, LISTING_REJECTION_REASONS)),
+);
+
+/** One host, with their listings, bookings, revenue, reviews and documents. */
+adminRouter.get(
+  "/hosts/:userId",
+  requireCapability("users.manage"),
+  asyncHandler(async (req, res) => {
+    const { userId } = validateParams(userParams, req);
+    return ok(res, await hostProfile(userId));
+  }),
+);
+
+
 adminRouter.post(
   "/users/:userId/suspend",
   requireCapability("users.manage"),
   asyncHandler(async (req, res) => {
     const { userId } = validateParams(userParams, req);
-    const { reason } = validateBody(
-      z.object({ reason: z.string().trim().min(5, "Give a reason of at least 5 characters.").max(600) }),
+    const { reason, until } = validateBody(
+      z.object({
+        reason: z.string().trim().min(5, "Give a reason of at least 5 characters.").max(600),
+        // Omitted or null means the suspension has no end date.
+        until: z.string().datetime().nullish(),
+      }),
       req,
     );
     const admin = currentUser(req);
-    const user = await setUserSuspended({ userId, suspended: true, reason, actingAdminId: admin.userId });
+    const user = await setUserSuspended({ userId, suspended: true, reason, until, actingAdminId: admin.userId });
     await recordModeration({
       adminId: admin.userId,
       action: "user_suspended",
@@ -352,6 +392,8 @@ adminRouter.delete(
 
 // --- bookings & payouts ------------------------------------------------------
 
+const isoDate = z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/);
+
 adminRouter.get(
   "/bookings",
   requireCapability("bookings.read"),
@@ -360,6 +402,11 @@ adminRouter.get(
       pagination.extend({
         status: z.enum(["pending", "confirmed", "declined", "cancelled", "completed"]).optional(),
         search: z.string().trim().max(120).optional(),
+        guest: z.string().trim().max(120).optional(),
+        host: z.string().trim().max(120).optional(),
+        listing: z.string().trim().max(160).optional(),
+        from: isoDate.optional(),
+        to: isoDate.optional(),
       }),
       req,
     );
@@ -367,9 +414,24 @@ adminRouter.get(
       limit: input.limit,
       offset: input.offset,
       search: input.search,
+      guest: input.guest,
+      host: input.host,
+      listing: input.listing,
+      from: input.from,
+      to: input.to,
       status: input.status ? [input.status] : undefined,
     });
     return ok(res, result.items, { total: result.total, limit: input.limit, offset: input.offset });
+  }),
+);
+
+/** Read-only traveller-host conversation shown on the reservation sheet. */
+adminRouter.get(
+  "/bookings/:bookingId/conversation",
+  requireCapability("bookings.read"),
+  asyncHandler(async (req, res) => {
+    const { bookingId } = validateParams(z.object({ bookingId: z.string().trim().min(1).max(140) }), req);
+    return ok(res, await bookingConversation(bookingId));
   }),
 );
 

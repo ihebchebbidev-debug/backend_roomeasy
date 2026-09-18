@@ -325,6 +325,30 @@ export async function grantRole(userId: string, role: Role, displayName?: string
   return account;
 }
 
+/**
+ * Files the identity document supplied when a member becomes a host. It is
+ * stored as a pending check so an administrator can verify or reject it; an
+ * already verified member keeps their status.
+ */
+export async function submitIdentityDocument(input: {
+  userId: string;
+  documentKind: string;
+  documentReference: string;
+}): Promise<void> {
+  await query(
+    `INSERT INTO identity_verification (user_id, status, document_kind, document_reference)
+     VALUES ($1, 'pending', $2, $3)
+     ON CONFLICT (user_id) DO UPDATE
+        SET document_kind = $2,
+            document_reference = $3,
+            status = CASE WHEN identity_verification.status = 'verified'
+                          THEN identity_verification.status
+                          ELSE 'pending'::verification_status END`,
+    [input.userId, input.documentKind, input.documentReference],
+    { label: "accounts.submitIdentityDocument" },
+  );
+}
+
 export async function revokeRole(userId: string, role: Role): Promise<void> {
   if (role === "guest") {
     throw apiError("CONFLICT", { message: "The guest role cannot be removed from an account." });

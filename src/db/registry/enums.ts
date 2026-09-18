@@ -66,6 +66,7 @@ export const enums: EnumDef[] = [
       "booking_modified",
       "ticket_assigned",
       "ticket_status_changed",
+      "ticket_action_taken",
       "commission_updated",
     ],
   },
@@ -74,7 +75,7 @@ export const enums: EnumDef[] = [
     values: ["fraud", "inappropriate", "wrong_information", "unavailable", "safety", "other"],
   },
   { name: "report_status", values: ["open", "reviewing", "resolved", "dismissed"] },
-  { name: "ticket_status", values: ["open", "pending", "resolved", "closed"] },
+  { name: "ticket_status", values: ["open", "pending", "awaiting_reply", "escalated", "resolved", "closed"] },
   { name: "ticket_priority", values: ["low", "normal", "high", "urgent"] },
   {
     name: "ticket_category",

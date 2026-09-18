@@ -602,10 +602,21 @@ export async function listHostBookings(
   return rows.map(mapBooking);
 }
 
-/** Admin list with paging and free-text search on reference / guest / stay. */
+/**
+ * Admin list with paging, free-text search on reference / guest / stay and the
+ * back-office filters from the admin specification: traveller, host, listing
+ * and stay dates.
+ */
 export async function listAllBookings(options: {
   status?: BookingStatus[];
   search?: string;
+  guest?: string;
+  host?: string;
+  listing?: string;
+  /** Keeps stays that end on or after this ISO date. */
+  from?: string;
+  /** Keeps stays that start on or before this ISO date. */
+  to?: string;
   limit?: number;
   offset?: number;
 }): Promise<{ items: BookingDto[]; total: number }> {
@@ -622,6 +633,32 @@ export async function listAllBookings(options: {
       `(b.reference ILIKE $${values.length} OR b.guest_name ILIKE $${values.length}
         OR b.guest_email ILIKE $${values.length} OR p.name ILIKE $${values.length})`,
     );
+  }
+  if (options.guest?.trim()) {
+    values.push(`%${options.guest.trim()}%`);
+    clauses.push(`(b.guest_name ILIKE $${values.length} OR b.guest_email ILIKE $${values.length})`);
+  }
+  if (options.host?.trim()) {
+    values.push(`%${options.host.trim()}%`);
+    clauses.push(
+      `EXISTS (SELECT 1 FROM app_user hu
+                 LEFT JOIN host_profile hp ON hp.user_id = hu.id
+                WHERE hu.id = p.host_id
+                  AND (hu.full_name ILIKE $${values.length} OR hu.email ILIKE $${values.length}
+                       OR hp.display_name ILIKE $${values.length}))`,
+    );
+  }
+  if (options.listing?.trim()) {
+    values.push(`%${options.listing.trim()}%`);
+    clauses.push(`(p.name ILIKE $${values.length} OR p.id::text ILIKE $${values.length})`);
+  }
+  if (options.from) {
+    values.push(options.from);
+    clauses.push(`b.check_out >= $${values.length}::date`);
+  }
+  if (options.to) {
+    values.push(options.to);
+    clauses.push(`b.check_in <= $${values.length}::date`);
   }
 
   const where = clauses.join(" AND ");

@@ -283,6 +283,9 @@ export async function saveListing(input: {
          published_at = CASE WHEN excluded.status = 'published'
                              THEN coalesce(listing.published_at, now()) ELSE listing.published_at END,
          rejected_reason = CASE WHEN excluded.status = 'published' THEN NULL ELSE listing.rejected_reason END,
+         -- A host editing a live listing sends it back through moderation: the
+         -- edited version only goes public once an admin approves it again.
+         approved = CASE WHEN excluded.status = 'published' THEN false ELSE listing.approved END,
          updated_at = now()
        RETURNING updated_at`,
       [
