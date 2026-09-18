@@ -4,7 +4,7 @@ import { z } from "zod";
 import { apiError } from "@/core/errors.js";
 import { asyncHandler, created, ok } from "@/core/http.js";
 import { isoDate, queryBoolean, validateBody, validateParams, validateQuery } from "@/core/validate.js";
-import { currentUser, isAdmin, optionalAuth, requireAuth } from "@/middleware/auth.js";
+import { currentUser, isAdmin, requireAuth } from "@/middleware/auth.js";
 import {
   assertBookingAccess,
   cancelBooking,
@@ -53,12 +53,12 @@ bookingsRouter.get(
 );
 
 /**
- * Checkout. A signed-in guest is linked to the booking; a visitor may book with
- * contact details only, exactly as the app's checkout screen allows.
+ * Checkout. Booking requires an account: the guest must be signed in so the
+ * stay, its payment and its confirmation page all belong to a real member.
  */
 bookingsRouter.post(
   "/",
-  optionalAuth,
+  requireAuth,
   asyncHandler(async (req, res) => {
     const body = validateBody(
       z
@@ -89,7 +89,7 @@ bookingsRouter.post(
       req,
     );
 
-    const user = req.auth ?? null;
+    const user = currentUser(req);
     const booking = await createBooking({
       propertyId: body.propertyId,
       from: body.from,
@@ -99,7 +99,7 @@ bookingsRouter.post(
       message: body.message ?? null,
       ...(body.paymentMethod === "stripe" || !body.card ? {} : { card: body.card }),
       isMobile: body.isMobile ?? false,
-      guestId: user?.userId ?? null,
+      guestId: user.userId,
     });
 
     req.log.info(

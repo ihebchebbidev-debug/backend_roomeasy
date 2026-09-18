@@ -6,7 +6,7 @@ import { apiError } from "@/core/errors.js";
 import { asyncHandler, ok } from "@/core/http.js";
 import { log } from "@/core/logger.js";
 import { validateBody } from "@/core/validate.js";
-import { currentUser, optionalAuth, requireAuth, requireRole } from "@/middleware/auth.js";
+import { currentUser, requireAuth, requireRole } from "@/middleware/auth.js";
 import {
   attachIntentToPendingPayment,
   hostStripeAccount,
@@ -46,16 +46,16 @@ paymentsRouter.get(
  */
 paymentsRouter.post(
   "/intents",
-  optionalAuth,
+  requireAuth,
   asyncHandler(async (req, res) => {
     if (!stripeEnabled()) throw apiError("CONFLICT", { message: "Card payments are not configured yet." });
     const { bookingReference } = validateBody(z.object({ bookingReference: z.string().trim().min(3).max(120) }), req);
-    // A guest may pay without an account; when signed in the booking must be theirs.
-    const user = req.auth ?? null;
+    // Paying requires an account, and the booking must belong to the signed-in member.
+    const user = currentUser(req);
 
     const booking = await payableBooking(bookingReference);
     if (!booking) throw apiError("NOT_FOUND", { message: "That booking does not exist." });
-    if (user && booking.guestId && booking.guestId !== user.userId && !user.roles.includes("admin")) {
+    if (booking.guestId !== user.userId && !user.roles.includes("admin")) {
       throw apiError("FORBIDDEN");
     }
 
