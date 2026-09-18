@@ -2,7 +2,7 @@ import { env } from "@/config/env.js";
 import { log } from "@/core/logger.js";
 import { query } from "@/db/query.js";
 import { mailerStatus, sendMail } from "@/modules/notifications/mailer.js";
-import { renderNotificationHtml } from "@/modules/notifications/render.js";
+import { renderNotificationHtml, renderPasswordResetHtml } from "@/modules/notifications/render.js";
 
 const logger = log("notifications");
 
@@ -13,6 +13,8 @@ type QueueRow = {
   body: string;
   locale: string;
   attempts: number;
+  template: string;
+  payload: Record<string, unknown> | null;
 };
 
 /**
@@ -39,7 +41,7 @@ export async function dispatchQueuedEmails(limit = env.MAIL_BATCH_SIZE): Promise
          LIMIT $1
          FOR UPDATE SKIP LOCKED
       )
-      RETURNING id, recipient_email, subject, body, locale, attempts`,
+      RETURNING id, recipient_email, subject, body, locale, attempts, template::text AS template, payload`,
     [limit],
     { label: "notifications.claim" },
   );
@@ -49,11 +51,21 @@ export async function dispatchQueuedEmails(limit = env.MAIL_BATCH_SIZE): Promise
 
   for (const row of rows) {
     try {
+      const code = typeof row.payload?.["code"] === "string" ? (row.payload["code"] as string) : null;
+      const html =
+        row.template === "password_reset" && code
+          ? renderPasswordResetHtml({
+              code,
+              name: typeof row.payload?.["name"] === "string" ? (row.payload["name"] as string) : null,
+              locale: row.locale,
+            })
+          : renderNotificationHtml({ subject: row.subject, body: row.body, locale: row.locale });
+
       const result = await sendMail({
         to: row.recipient_email,
         subject: row.subject,
         text: row.body,
-        html: renderNotificationHtml({ subject: row.subject, body: row.body, locale: row.locale }),
+        html,
       });
       await query(
         `UPDATE notification_outbox

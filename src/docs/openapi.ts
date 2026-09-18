@@ -116,13 +116,19 @@ op("get", "/accounts/{userId}/avatar", {
   params: ["userId"],
 });
 op("post", "/accounts/forgot-password", {
-  summary: "Request a password reset link",
+  summary: "Email a 4-digit password reset code",
   tags: ["Accounts"],
   auth: "none",
   body: obj({ email: { type: "string", format: "email" } }, ["email"]),
 });
+op("post", "/accounts/verify-reset-code", {
+  summary: "Trade the 4-digit code for a single-use reset ticket",
+  tags: ["Accounts"],
+  auth: "none",
+  body: obj({ email: { type: "string", format: "email" }, code: str }, ["email", "code"]),
+});
 op("post", "/accounts/reset-password", {
-  summary: "Set a new password with a reset token",
+  summary: "Set a new password with a reset ticket",
   tags: ["Accounts"],
   auth: "none",
   body: obj({ token: str, password: str }, ["token", "password"]),

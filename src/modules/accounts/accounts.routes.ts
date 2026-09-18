@@ -12,7 +12,8 @@ import { rateLimit } from "@/middleware/rateLimit.js";
 import {
   changePassword,
   createAccount,
-  createPasswordResetToken,
+  createPasswordResetCode,
+  exchangeResetCodeForTicket,
   findAvatar,
   findAccountById,
   grantRole,
@@ -215,25 +216,24 @@ accountsRouter.post(
   rateLimit({ windowMs: 15 * 60_000, max: 10, name: "forgot-password" }),
   asyncHandler(async (req, res) => {
     const body = validateBody(z.object({ email: emailField }), req);
-    const issued = await createPasswordResetToken(body.email, req.ip ?? null);
+    const issued = await createPasswordResetCode(body.email, req.ip ?? null);
 
-    // A real address gets the link by email; the reply below stays identical
+    // A real address gets the code by email; the reply below stays identical
     // either way so the endpoint cannot be used to enumerate accounts.
     if (issued) {
-      const link = `${env.APP_PUBLIC_URL.replace(/\/+$/, "")}/reset-password?token=${encodeURIComponent(issued.token)}`;
       await queueNotification({
         recipientEmail: body.email,
         template: "password_reset",
-        subject: `Reset your ${env.APP_NAME} password`,
+        subject: `${issued.code} is your ${env.APP_NAME} verification code`,
         body: [
-          "We received a request to choose a new password for your account.",
+          `We received a request to choose a new password for your ${env.APP_NAME} account.`,
           "",
-          `Open this link to set it: ${link}`,
+          `Your verification code is: ${issued.code}`,
           "",
-          "The link works once and expires in one hour.",
+          "Enter it on the password reset screen. The code works once and expires in 15 minutes.",
           "If you did not ask for this, you can ignore this message — your password stays unchanged.",
         ].join("\n"),
-        payload: { expiresAt: issued.expiresAt },
+        payload: { expiresAt: issued.expiresAt, code: issued.code, name: issued.fullName },
       });
       // Password resets are time-sensitive: flush the queue now instead of
       // waiting for the background worker's next tick.
@@ -245,11 +245,28 @@ accountsRouter.post(
     req.log.info({ email: body.email, issued: Boolean(issued) }, "password reset requested");
 
     return ok(res, {
-      message: "If an account uses that address, a reset link is on its way.",
-      // Outside production the token is returned so the flow is testable
+      message: "If an account uses that address, a 4-digit code is on its way.",
+      // Outside production the code is returned so the flow is testable
       // before an email provider is connected.
-      ...(isProduction || !issued ? {} : { devToken: issued.token, expiresAt: issued.expiresAt }),
+      ...(isProduction || !issued ? {} : { devCode: issued.code, expiresAt: issued.expiresAt }),
     });
+  }),
+);
+
+/** Step two: the 4-digit code is traded for a single-use ticket. */
+accountsRouter.post(
+  "/verify-reset-code",
+  rateLimit({ windowMs: 15 * 60_000, max: 10, name: "verify-reset-code" }),
+  asyncHandler(async (req, res) => {
+    const body = validateBody(
+      z.object({
+        email: emailField,
+        code: z.string().trim().regex(/^\d{4}$/, "Enter the 4-digit code from your email."),
+      }),
+      req,
+    );
+    const ticket = await exchangeResetCodeForTicket(body.email, body.code);
+    return ok(res, { message: "Code confirmed. Choose a new password.", ...ticket });
   }),
 );
 
@@ -257,7 +274,7 @@ accountsRouter.post(
   "/reset-password",
   rateLimit({ windowMs: 15 * 60_000, max: 20, name: "reset-password" }),
   asyncHandler(async (req, res) => {
-    const body = validateBody(z.object({ token: z.string().min(10, "This reset link is not valid."), password: passwordField }), req);
+    const body = validateBody(z.object({ token: z.string().min(10, "This reset request is not valid."), password: passwordField }), req);
     await resetPasswordWithToken(body.token, body.password);
     return ok(res, { message: "Your password has been changed. Sign in with the new password." });
   }),

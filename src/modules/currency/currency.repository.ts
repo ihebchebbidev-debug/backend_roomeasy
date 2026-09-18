@@ -5,18 +5,16 @@ import { listExchangeRates, saveExchangeRates } from "@/modules/settings/setting
  * USD-based exchange rates. The app shows prices in USD, EUR, GBP, CHF and BRL
  * (`src/i18n/CurrencyProvider.tsx`), so those are the quotes kept fresh here.
  *
- * Rates are cached in the `exchange_rate` table. A refresh is attempted when
- * the stored rates are older than `MAX_AGE_MS`; if the provider is unreachable
- * the last known rates are served, and only if there are none do the built-in
- * fallbacks apply.
+ * Rates come from the live provider and are cached in the `exchange_rate`
+ * table. A refresh is attempted when the stored rates are older than
+ * `MAX_AGE_MS`; if the provider is unreachable the last known live rates are
+ * served, and if there are none only USD is quoted.
  */
 
 const logger = log("currency");
 
 export const SUPPORTED_CURRENCIES = ["USD", "EUR", "GBP", "CHF", "BRL"] as const;
 export type SupportedCurrency = (typeof SUPPORTED_CURRENCIES)[number];
-
-const FALLBACK_RATES: Record<string, number> = { USD: 1, EUR: 0.92, GBP: 0.79, CHF: 0.88, BRL: 5.4 };
 
 const MAX_AGE_MS = 60 * 60 * 1000; // one hour
 const PROVIDER_URL = "https://api.frankfurter.app/latest?from=USD&to=EUR,GBP,CHF,BRL";
@@ -26,7 +24,7 @@ export type RatesPayload = {
   base: "USD";
   rates: Record<string, number>;
   fetchedAt: string | null;
-  source: "provider" | "cache" | "fallback";
+  source: "provider" | "cache" | "unavailable";
 };
 
 async function fetchFromProvider(): Promise<Record<string, number> | null> {
@@ -79,8 +77,10 @@ export async function getRates(options: { force?: boolean } = {}): Promise<Rates
     return { base: "USD", rates, fetchedAt: newest, source: "cache" };
   }
 
-  logger.warn("no exchange rates stored yet — serving built-in fallbacks");
-  return { base: "USD", rates: { ...FALLBACK_RATES }, fetchedAt: null, source: "fallback" };
+  // No hardcoded rate table: a stale constant would quote guests a wrong
+  // price, so callers are told that only USD is available.
+  logger.warn("no exchange rates available — quoting USD only");
+  return { base: "USD", rates: { USD: 1 }, fetchedAt: null, source: "unavailable" };
 }
 
 /** Converts a USD amount into another supported currency. */

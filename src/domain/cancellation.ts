@@ -20,7 +20,9 @@ export function refundFor(options: {
   const share = options.cancelledBy === "guest" ? refundShare(options.policy, daysBeforeCheckIn) : 1;
   return {
     percent: Number((share * 100).toFixed(2)),
-    amountUsd: Math.round(options.totalUsd * share * 100) / 100,
+    // Whole dollars, exactly like the quote engine rounds every line it charges;
+    // a cents-precise refund could never match a whole-dollar total.
+    amountUsd: Math.round(options.totalUsd * share),
     daysBeforeCheckIn,
   };
 }

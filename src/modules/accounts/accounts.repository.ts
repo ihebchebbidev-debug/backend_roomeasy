@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, randomInt } from "node:crypto";
 
 import bcrypt from "bcryptjs";
 
@@ -342,6 +342,12 @@ function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
 
+/** A 4-digit code is only safe when it is scoped to one account. */
+function hashCode(userId: string, code: string): string {
+  return hashToken(`${userId}:${code}`);
+}
+
+
 /**
  * Creates a single-use reset token. The plain token is returned so the caller
  * can email it; only its hash is stored.
@@ -385,6 +391,70 @@ export async function resetPasswordWithToken(token: string, newPassword: string)
       label: "accounts.consumeResetToken",
     });
   }, "accounts.resetPassword");
+}
+
+/**
+ * Issues a 4-digit confirmation code for the forgot-password screen. Any code
+ * still pending for the account is retired first, only the hash is stored, and
+ * the code lives for 15 minutes.
+ */
+export async function createPasswordResetCode(
+  email: string,
+  requestedIp: string | null,
+): Promise<{ code: string; expiresAt: string; fullName: string; locale: string } | null> {
+  const row = await queryOne<{ id: string; full_name: string; locale: string }>(
+    `SELECT id, full_name, locale FROM app_user WHERE lower(email) = lower($1)`,
+    [email],
+    { label: "accounts.findResetRecipient" },
+  );
+  // Unknown address: return null and let the route answer "code sent" anyway.
+  if (!row) return null;
+
+  await query(`UPDATE password_reset_token SET used_at = now() WHERE user_id = $1 AND used_at IS NULL`, [row.id], {
+    label: "accounts.retireResetCodes",
+  });
+
+  const code = String(randomInt(1000, 10000));
+  const created = await queryOne<{ expires_at: Date }>(
+    `INSERT INTO password_reset_token (user_id, token_hash, expires_at, requested_ip)
+     VALUES ($1, $2, now() + interval '15 minutes', $3)
+     RETURNING expires_at`,
+    [row.id, hashCode(row.id, code), requestedIp],
+    { label: "accounts.createResetCode" },
+  );
+
+  return { code, expiresAt: created!.expires_at.toISOString(), fullName: row.full_name, locale: row.locale };
+}
+
+/**
+ * Trades a correct 4-digit code for a single-use ticket. The ticket is what the
+ * "choose a new password" step sends back, so the code never travels twice.
+ */
+export async function exchangeResetCodeForTicket(
+  email: string,
+  code: string,
+): Promise<{ token: string; expiresAt: string }> {
+  const user = await queryOne<{ id: string }>(`SELECT id FROM app_user WHERE lower(email) = lower($1)`, [email], {
+    label: "accounts.findResetUser",
+  });
+  if (!user) throw apiError("RESET_TOKEN_INVALID");
+
+  const ticket = randomBytes(32).toString("base64url");
+  const updated = await queryOne<{ expires_at: Date }>(
+    `UPDATE password_reset_token
+        SET token_hash = $3, expires_at = now() + interval '15 minutes'
+      WHERE id = (
+        SELECT id FROM password_reset_token
+         WHERE user_id = $1 AND token_hash = $2 AND used_at IS NULL AND expires_at > now()
+         ORDER BY created_at DESC LIMIT 1
+      )
+      RETURNING expires_at`,
+    [user.id, hashCode(user.id, code), hashToken(ticket)],
+    { label: "accounts.exchangeResetCode" },
+  );
+  if (!updated) throw apiError("RESET_TOKEN_INVALID");
+
+  return { token: ticket, expiresAt: updated.expires_at.toISOString() };
 }
 
 // ---------------------------------------------------------------------------

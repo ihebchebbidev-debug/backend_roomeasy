@@ -542,10 +542,18 @@ export async function findBooking(bookingId: string): Promise<BookingDto | null>
   return row ? mapBooking(row) : null;
 }
 
+/**
+ * Guest and host lists are read straight into a screen, so they are capped:
+ * without a limit a long-standing account would return every booking it ever
+ * had in one response.
+ */
+const MAX_PAGE = 500;
+const pageSize = (limit?: number) => Math.min(Math.max(1, limit ?? MAX_PAGE), MAX_PAGE);
+
 /** The guest's own trips; `scope` splits upcoming from past. */
 export async function listGuestBookings(
   guestId: string,
-  options: { status?: BookingStatus[]; scope?: "upcoming" | "past" | "all" } = {},
+  options: { status?: BookingStatus[]; scope?: "upcoming" | "past" | "all"; limit?: number; offset?: number } = {},
 ): Promise<BookingDto[]> {
   const clauses = ["b.guest_id = $1"];
   const values: unknown[] = [guestId];
@@ -557,8 +565,10 @@ export async function listGuestBookings(
   if (options.scope === "upcoming") clauses.push("b.check_out >= CURRENT_DATE AND b.status IN ('pending', 'confirmed')");
   if (options.scope === "past") clauses.push("(b.check_out < CURRENT_DATE OR b.status IN ('completed', 'cancelled', 'declined'))");
 
+  values.push(pageSize(options.limit), Math.max(0, options.offset ?? 0));
   const rows = await query<BookingRow>(
-    `${SELECT_BOOKING} WHERE ${clauses.join(" AND ")} ORDER BY b.check_in DESC`,
+    `${SELECT_BOOKING} WHERE ${clauses.join(" AND ")} ORDER BY b.check_in DESC
+     LIMIT $${values.length - 1} OFFSET $${values.length}`,
     values,
     { label: "bookings.listForGuest" },
   );
@@ -568,7 +578,7 @@ export async function listGuestBookings(
 /** Bookings across every listing of one host. */
 export async function listHostBookings(
   hostId: string,
-  options: { status?: BookingStatus[]; propertyId?: string } = {},
+  options: { status?: BookingStatus[]; propertyId?: string; limit?: number; offset?: number } = {},
 ): Promise<BookingDto[]> {
   const clauses = ["p.host_id = $1"];
   const values: unknown[] = [hostId];
@@ -582,8 +592,10 @@ export async function listHostBookings(
     clauses.push(`b.property_id = $${values.length}`);
   }
 
+  values.push(pageSize(options.limit), Math.max(0, options.offset ?? 0));
   const rows = await query<BookingRow>(
-    `${SELECT_BOOKING} WHERE ${clauses.join(" AND ")} ORDER BY b.check_in DESC`,
+    `${SELECT_BOOKING} WHERE ${clauses.join(" AND ")} ORDER BY b.check_in DESC
+     LIMIT $${values.length - 1} OFFSET $${values.length}`,
     values,
     { label: "bookings.listForHost" },
   );
@@ -705,7 +717,8 @@ export async function decideBooking(input: {
         { client, label: "bookings.declineRefund" },
       );
       await query(
-        `UPDATE payment SET status = 'refunded', refunded_usd = amount_usd WHERE booking_id = $1`,
+        `UPDATE payment SET status = 'refunded', refunded_usd = amount_usd
+         WHERE booking_id = $1 AND status IN ('authorized', 'paid')`,
         [booking.id],
         { client, label: "bookings.declineRefundPayment" },
       );
@@ -785,7 +798,8 @@ export async function cancelBooking(input: {
 
     if (refund.amountUsd > 0) {
       await query(
-        `UPDATE payment SET status = 'refunded', refunded_usd = $2 WHERE booking_id = $1`,
+        `UPDATE payment SET status = 'refunded', refunded_usd = $2
+         WHERE booking_id = $1 AND status IN ('authorized', 'paid')`,
         [booking.id, refund.amountUsd],
         { client, label: "bookings.refundPayment" },
       );
