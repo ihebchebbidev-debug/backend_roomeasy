@@ -41,6 +41,15 @@ pool.on("error", (error) => {
   logger.error({ err: error }, "Idle PostgreSQL client errored");
 });
 
+// Every session speaks UTC so `CURRENT_DATE` in SQL and `today()` in Node can
+// never disagree about which day it is.
+pool.on("connect", (client) => {
+  void client.query("SET TIME ZONE 'UTC'").catch((error: unknown) => {
+    logger.error({ err: error }, "Could not pin the session timezone to UTC");
+  });
+});
+
+
 /** Human readable target, used in the boot banner (never logs the password). */
 export function databaseTarget(): string {
   if (env.DATABASE_URL.trim()) {

@@ -53,12 +53,21 @@ const envSchema = z.object({
   MAIL_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(20),
   MAIL_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(20).default(5),
 
+  // --- Unpaid booking holds -------------------------------------------------
+  /** How long a pending, unpaid booking keeps its nights before it expires. */
+  BOOKING_HOLD_MINUTES: z.coerce.number().int().min(5).max(1440).default(30),
+  /** Background sweep that releases expired holds. */
+  BOOKING_MAINTENANCE: boolish(true),
+  BOOKING_MAINTENANCE_SECONDS: z.coerce.number().int().min(30).max(3600).default(120),
+
   // --- Stripe ---------------------------------------------------------------
   STRIPE_SECRET_KEY: z.string().default(""),
   STRIPE_PUBLISHABLE_KEY: z.string().default(""),
   STRIPE_WEBHOOK_SECRET: z.string().default(""),
   STRIPE_CONNECT_COUNTRY: z.string().default(""),
-  PAYMENT_CURRENCY: z.string().length(3).default("EUR"),
+  // Every amount in the system is stored in USD (booking.currency = 'USD').
+  PAYMENT_CURRENCY: z.string().length(3).default("USD"),
+
 
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace"]).default("info"),
   LOG_PRETTY: boolish(false),

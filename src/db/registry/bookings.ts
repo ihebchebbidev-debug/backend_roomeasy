@@ -78,6 +78,10 @@ export const bookingTables: TableDef[] = [
       { name: "refunded_usd", type: "numeric(12,2)", notNull: true, default: "0", check: "refunded_usd >= 0" },
       { name: "stripe_payment_intent_id", type: "text" },
       { name: "stripe_charge_id", type: "text" },
+      // True when the charge itself already routed the host share to the
+      // connected account (Stripe destination charge), so the payout register
+      // must never pay that booking a second time.
+      { name: "host_settled", type: "boolean", notNull: true, default: "false" },
       { name: "created_at", type: "timestamptz", notNull: true, default: "now()" },
     ],
     indexes: [
@@ -113,6 +117,8 @@ export const bookingTables: TableDef[] = [
       { name: "commission_usd", type: "numeric(12,2)", notNull: true, default: "0", check: "commission_usd >= 0" },
       { name: "status", type: "payout_status", notNull: true, default: "'scheduled'" },
       { name: "payout_date", type: "date", notNull: true, default: "CURRENT_DATE" },
+      { name: "stripe_transfer_id", type: "text" },
+      { name: "paid_at", type: "timestamptz" },
       { name: "created_at", type: "timestamptz", notNull: true, default: "now()" },
     ],
     indexes: [

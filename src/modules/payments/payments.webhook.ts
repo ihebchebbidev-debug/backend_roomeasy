@@ -76,11 +76,18 @@ async function handleEvent(event: Stripe.Event): Promise<void> {
           last4: card?.card?.last4,
           chargeId: typeof intent.latest_charge === "string" ? intent.latest_charge : null,
         });
+        // Paying never overrides the host's decision: only an instant-book
+        // stay confirms itself. A request stays `pending` until the host
+        // accepts it.
         await query(
-          `UPDATE booking SET status = 'confirmed' WHERE id = $1 AND status = 'pending'`,
+          `UPDATE booking b SET status = 'confirmed', updated_at = now()
+             FROM property p
+            WHERE b.id = $1 AND b.status = 'pending'
+              AND p.id = b.property_id AND p.instant_book`,
           [bookingId],
           { label: "webhook.booking-confirm" },
         );
+
       } else {
         await confirmBookingPaid(intent.id);
       }
@@ -114,14 +121,16 @@ async function handleEvent(event: Stripe.Event): Promise<void> {
       const account = event.data.object as Stripe.Account;
       const hostId = (account.metadata?.["hostId"] as string | undefined) ?? (await hostIdForAccount(account.id));
       if (hostId) {
-        await setHostStripeAccount({
+        const { payoutsJustEnabled } = await setHostStripeAccount({
           hostId,
           accountId: account.id,
           chargesEnabled: Boolean(account.charges_enabled),
           payoutsEnabled: Boolean(account.payouts_enabled),
           detailsSubmitted: Boolean(account.details_submitted),
         });
-        if (account.payouts_enabled && account.details_submitted) {
+        // Only on the false -> true transition: Stripe re-sends
+        // `account.updated` for any account change and retries deliveries.
+        if (payoutsJustEnabled) {
           await queueNotification({
             recipientId: hostId,
             template: "payouts_ready",
@@ -130,6 +139,7 @@ async function handleEvent(event: Stripe.Event): Promise<void> {
             payload: { accountId: account.id },
           });
         }
+
       }
       break;
     }

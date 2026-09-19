@@ -1,4 +1,7 @@
+import type { PoolClient } from "pg";
+
 import { stayNights } from "@/core/dates.js";
+
 import { query } from "@/db/query.js";
 
 export type CalendarNight = { night: string; blocked: boolean; priceUsd: number | null; note: string | null };
@@ -74,13 +77,19 @@ export async function calendarForProperty(
 }
 
 /** Nights as a lookup map, the shape the quote engine expects. */
-export async function calendarMap(propertyId: string, from: string, to: string): Promise<CalendarMap> {
+export async function calendarMap(
+  propertyId: string,
+  from: string,
+  to: string,
+  client?: PoolClient,
+): Promise<CalendarMap> {
   const rows = await query<NightRow>(
     `SELECT night, blocked, price_usd, note FROM calendar_night
       WHERE property_id = $1 AND night >= $2::date AND night < $3::date`,
     [propertyId, from, to],
-    { label: "calendar.map" },
+    { client, label: "calendar.map" },
   );
+
 
   const map: CalendarMap = {};
   for (const row of rows) {

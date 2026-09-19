@@ -6,6 +6,7 @@ import { log } from "@/core/logger.js";
 import { reconcileSchema } from "@/db/migrate.js";
 import { syncEquipmentCatalogue } from "@/db/sync-equipment.js";
 import { closePool, databaseTarget } from "@/db/pool.js";
+import { startBookingMaintenanceWorker, stopBookingMaintenanceWorker } from "@/modules/bookings/bookings.maintenance.js";
 import { startNotificationWorker, stopNotificationWorker } from "@/modules/notifications/dispatcher.js";
 import { mailerStatus } from "@/modules/notifications/mailer.js";
 import { stripeStatus } from "@/modules/payments/stripe.client.js";
@@ -42,6 +43,7 @@ async function bootstrap(): Promise<void> {
   );
 
   startNotificationWorker();
+  startBookingMaintenanceWorker();
 
   const app = createApp();
   const server: Server = app.listen(env.PORT, () => {
@@ -63,6 +65,7 @@ async function bootstrap(): Promise<void> {
     shuttingDown = true;
     logger.info({ signal }, "shutting down");
     stopNotificationWorker();
+    stopBookingMaintenanceWorker();
     const timer = setTimeout(() => {
       logger.error("shutdown took too long — forcing exit");
       process.exit(1);

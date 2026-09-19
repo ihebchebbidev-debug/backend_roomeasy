@@ -1,5 +1,6 @@
 import type { PoolClient } from "pg";
 
+import { env } from "@/config/env.js";
 import { daysBetween, stayNights, today } from "@/core/dates.js";
 import { apiError } from "@/core/errors.js";
 import { bookingId as newBookingId, bookingReference, paymentIntentReference } from "@/core/ids.js";
@@ -8,6 +9,8 @@ import { refundFor, type CancellationPolicy } from "@/domain/cancellation.js";
 import { authorizeCard, type CardInput } from "@/domain/cards.js";
 import { computeQuote, type PriceBreakdown } from "@/domain/pricing.js";
 import { calendarMap } from "@/modules/listings/calendar.repository.js";
+import { refundThroughStripe } from "@/modules/payments/refunds.js";
+
 import { getHostRateRules, getPlatformSettings } from "@/modules/settings/settings.repository.js";
 
 export type BookingStatus = "pending" | "confirmed" | "declined" | "cancelled" | "completed";
@@ -243,7 +246,7 @@ type StayRow = {
 };
 
 /** The live pricing + policy record a quote or booking is built from. */
-export async function loadStay(propertyId: string): Promise<StayRow> {
+export async function loadStay(propertyId: string, client?: PoolClient): Promise<StayRow> {
   const row = await queryOne<StayRow>(
     `SELECT p.id AS property_id, p.host_id, p.name, p.guests, p.cleaning_fee_usd, p.min_nights,
             p.cancellation_policy, p.instant_book,
@@ -254,8 +257,9 @@ export async function loadStay(propertyId: string): Promise<StayRow> {
        LEFT JOIN listing l ON l.property_id = p.id
       WHERE p.id = $1`,
     [propertyId],
-    { label: "bookings.loadStay" },
+    { client, label: "bookings.loadStay" },
   );
+
   if (!row) {
     throw apiError("NOT_FOUND", {
       message: `No stay exists with the id "${propertyId}".`,
@@ -296,7 +300,14 @@ export async function checkAvailability(input: {
   ignoreBookingId?: string;
   client?: PoolClient;
 }): Promise<AvailabilityResult> {
-  const stay = await loadStay(input.propertyId);
+  // Release nights held by bookings that were never paid before reading the
+  // calendar; skipped inside an open transaction to avoid lock contention.
+  if (!input.client) await sweepExpiredHolds();
+
+  // Every read uses the caller's connection when there is one, so a check run
+  // inside a transaction sees one consistent snapshot.
+  const stay = await loadStay(input.propertyId, input.client);
+
   const nights = stayNights(input.from, input.to);
   const reasons: string[] = [];
 
@@ -312,7 +323,7 @@ export async function checkAvailability(input: {
     reasons.push("This stay is not currently open for bookings.");
   }
 
-  const calendar = await calendarMap(input.propertyId, input.from, input.to);
+  const calendar = await calendarMap(input.propertyId, input.from, input.to, input.client);
   const blockedNights = nights.filter((night) => calendar[night]?.blocked);
   if (blockedNights.length) {
     reasons.push(`The host has blocked ${blockedNights.length} of those nights.`);
@@ -701,6 +712,9 @@ export async function assertBookingAccess(
 // Host decision, cancellation, completion
 // ---------------------------------------------------------------------------
 
+
+
+
 /** Host accepts or declines a pending request. */
 export async function decideBooking(input: {
   bookingId: string;
@@ -720,7 +734,14 @@ export async function decideBooking(input: {
     });
   }
 
+  // A declined request gives the guest everything back — through Stripe first,
+  // so the database is never marked "refunded" for money that never moved.
+  if (input.decision === "declined") {
+    await refundThroughStripe(booking.id, booking.price.totalUsd);
+  }
+
   const row = await transaction(async (client) => {
+
     if (input.decision === "confirmed") {
       // Re-check now: another request may have taken the nights while pending.
       const availability = await checkAvailability({
@@ -749,7 +770,11 @@ export async function decideBooking(input: {
       await query(
         `INSERT INTO booking_cancellation (booking_id, cancelled_by, cancelled_by_id, policy, refund_percent, refund_usd, reason)
          VALUES ($1, 'host', $2, $3::cancellation_policy, 100, $4, 'Declined by the host')
-         ON CONFLICT (booking_id) DO NOTHING`,
+         ON CONFLICT (booking_id) DO UPDATE
+           SET cancelled_by = excluded.cancelled_by, cancelled_by_id = excluded.cancelled_by_id,
+               refund_percent = excluded.refund_percent, refund_usd = excluded.refund_usd,
+               reason = excluded.reason, cancelled_at = now()`,
+
         [booking.id, input.actorId, booking.cancellationPolicy, booking.price.totalUsd],
         { client, label: "bookings.declineRefund" },
       );
@@ -809,7 +834,12 @@ export async function cancelBooking(input: {
     cancelledBy: input.actorRole,
   });
 
+  // Send the money back through Stripe before recording the refund, so the
+  // payment row can never claim a refund the card never received.
+  await refundThroughStripe(booking.id, refund.amountUsd);
+
   const row = await transaction(async (client) => {
+
     await query(`UPDATE booking SET status = 'cancelled', updated_at = now() WHERE id = $1`, [booking.id], {
       client,
       label: "bookings.cancel",
@@ -867,4 +897,72 @@ export async function completeFinishedStays(): Promise<number> {
     ]);
   }
   return rows.length;
+}
+
+// ---------------------------------------------------------------------------
+// Unpaid holds
+// ---------------------------------------------------------------------------
+
+/**
+ * Releases the nights held by bookings that were never paid.
+ *
+ * A booking is created as `pending` with a `pending` payment row when the guest
+ * chooses Stripe but never completes the checkout. Those nights stay blocked by
+ * the overlap constraint, so after `BOOKING_HOLD_MINUTES` the booking is
+ * cancelled (refund 0, actor `system`) and its payment row marked `failed`.
+ *
+ * Safe to call as often as needed: the update only matches rows that are still
+ * pending and still unpaid.
+ */
+export async function expireUnpaidBookings(holdMinutes = env.BOOKING_HOLD_MINUTES): Promise<number> {
+  return transaction(async (client) => {
+    const expired = await query<{ id: string; reference: string; guest_id: string | null; guest_email: string | null }>(
+      `UPDATE booking b
+          SET status = 'cancelled', updated_at = now()
+        WHERE b.status = 'pending'
+          AND b.created_at < now() - ($1::int * interval '1 minute')
+          AND NOT EXISTS (
+                SELECT 1 FROM payment p
+                 WHERE p.booking_id = b.id AND p.status IN ('authorized', 'paid'))
+        RETURNING b.id, b.reference, b.guest_id, b.guest_email`,
+      [holdMinutes],
+      { client, label: "bookings.expireUnpaid" },
+    );
+    if (!expired.length) return 0;
+
+    const ids = expired.map((row) => row.id);
+
+    await query(
+      `INSERT INTO booking_cancellation (booking_id, cancelled_by, cancelled_by_id, policy, refund_percent, refund_usd, reason)
+       SELECT b.id, 'system'::actor_role, NULL, p.cancellation_policy, 0, 0,
+              'Payment was not completed in time, so the dates were released.'
+         FROM booking b JOIN property p ON p.id = b.property_id
+        WHERE b.id = ANY($1::text[])
+       ON CONFLICT (booking_id) DO NOTHING`,
+      [ids],
+      { client, label: "bookings.expireUnpaid.cancellations" },
+    );
+
+    await query(
+      `UPDATE payment SET status = 'failed' WHERE booking_id = ANY($1::text[]) AND status = 'pending'`,
+      [ids],
+      { client, label: "bookings.expireUnpaid.payments" },
+    );
+
+    return expired.length;
+  }, "bookings.expireUnpaid");
+}
+
+let lastSweepAt = 0;
+
+/**
+ * Cheap guard used on the read paths (availability, quote, checkout): runs the
+ * sweep at most once every 30 seconds so a guest never sees nights held by a
+ * booking that has already expired.
+ */
+export async function sweepExpiredHolds(): Promise<void> {
+  const now = Date.now();
+  if (now - lastSweepAt < 30_000) return;
+  lastSweepAt = now;
+  await expireUnpaidBookings();
 }

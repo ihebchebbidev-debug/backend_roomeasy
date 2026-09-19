@@ -1,5 +1,6 @@
 import { apiError } from "@/core/errors.js";
 import { query, queryOne } from "@/db/query.js";
+import { refundThroughStripe } from "@/modules/payments/refunds.js";
 
 // --- bookings ----------------------------------------------------------------
 
@@ -76,6 +77,12 @@ export async function adminCancelBooking(input: {
 
   const refundUsd = Math.round(booking.totalUsd * input.refundPercent) / 100;
 
+  // Send the money back through Stripe first: if it fails, nothing in our own
+  // tables claims the guest was refunded.
+  await refundThroughStripe(booking.id, refundUsd);
+
+
+
   await query("UPDATE booking SET status = 'cancelled', decided_at = now(), decided_by = $2 WHERE id = $1", [
     booking.id,
     input.adminId,
@@ -120,6 +127,9 @@ export async function refundBooking(input: {
       message: `At most ${remaining.toFixed(2)} USD can still be refunded on this booking.`,
     });
   }
+
+  // Real money moves first; the audit row is only written once Stripe agrees.
+  await refundThroughStripe(booking.id, input.amountUsd);
 
   await query(
     "INSERT INTO booking_refund (booking_id, amount_usd, reason, issued_by) VALUES ($1, $2, $3, $4)",

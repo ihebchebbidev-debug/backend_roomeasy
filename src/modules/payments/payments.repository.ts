@@ -113,6 +113,41 @@ export async function markPaymentRefunded(intentId: string, refundedAmount: numb
 }
 
 /**
+ * The Stripe references of a booking's live payment, so a decline or a
+ * cancellation can send the money back through Stripe instead of only writing
+ * `refunded` in our own table.
+ */
+export async function stripePaymentForBooking(bookingId: string): Promise<{
+  intentId: string | null;
+  chargeId: string | null;
+  status: string;
+  amountUsd: number;
+} | null> {
+  const row = await queryOne<{
+    stripe_payment_intent_id: string | null;
+    stripe_charge_id: string | null;
+    status: string;
+    amount_usd: string;
+  }>(
+    `SELECT stripe_payment_intent_id, stripe_charge_id, status, amount_usd
+       FROM payment
+      WHERE booking_id = $1 AND status IN ('authorized', 'paid')
+      ORDER BY created_at DESC
+      LIMIT 1`,
+    [bookingId],
+    { label: "payments.forBooking" },
+  );
+  if (!row) return null;
+  return {
+    intentId: row.stripe_payment_intent_id,
+    chargeId: row.stripe_charge_id,
+    status: row.status,
+    amountUsd: Number(row.amount_usd),
+  };
+}
+
+
+/**
  * Ties a fresh PaymentIntent to the booking's pending payment row (created when
  * the guest chose Stripe) so the webhook later flips that same row to paid
  * instead of leaving a duplicate behind.
@@ -151,27 +186,43 @@ export async function confirmBookingPaid(intentId: string): Promise<string | nul
   return row?.booking_id ?? null;
 }
 
-/** Saves the connected-account id and onboarding state for a host. */
+/**
+ * Saves the connected-account id and onboarding state for a host and reports
+ * whether payouts have just become possible, so the "payouts ready" e-mail is
+ * sent once on the transition instead of on every `account.updated` delivery.
+ */
 export async function setHostStripeAccount(input: {
   hostId: string;
   accountId: string;
   chargesEnabled: boolean;
   payoutsEnabled: boolean;
   detailsSubmitted: boolean;
-}): Promise<void> {
-  await query(
-    `UPDATE host_profile
+}): Promise<{ payoutsJustEnabled: boolean }> {
+  const row = await queryOne<{ was_ready: boolean }>(
+    // `prev` reads the row as it stood before the update, so `was_ready` is the
+    // previous state (a plain RETURNING would hand back the new values).
+    `WITH prev AS (
+       SELECT user_id, (stripe_payouts_enabled AND stripe_details_submitted) AS was_ready
+         FROM host_profile WHERE user_id = $1
+     )
+     UPDATE host_profile h
         SET stripe_account_id = $2,
             stripe_charges_enabled = $3,
             stripe_payouts_enabled = $4,
             stripe_details_submitted = $5,
             payouts_onboarded = $4,
-            payout_reference = COALESCE(payout_reference, $2)
-      WHERE user_id = $1`,
+            payout_reference = COALESCE(h.payout_reference, $2)
+       FROM prev
+      WHERE h.user_id = prev.user_id
+      RETURNING prev.was_ready`,
     [input.hostId, input.accountId, input.chargesEnabled, input.payoutsEnabled, input.detailsSubmitted],
     { label: "payments.host-account" },
   );
+
+  const isReady = input.payoutsEnabled && input.detailsSubmitted;
+  return { payoutsJustEnabled: isReady && !row?.was_ready };
 }
+
 
 export async function hostStripeAccount(hostId: string): Promise<{
   accountId: string | null;

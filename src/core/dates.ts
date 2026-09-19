@@ -1,14 +1,18 @@
-/** Date helpers mirroring `src/lib/pricing.ts` in the front-end. */
+/**
+ * Date helpers. The server works in UTC only: the pool pins every PostgreSQL
+ * session to UTC (`db/pool.ts`), so `today()` must agree with `CURRENT_DATE`.
+ * The front-end keeps its own local-time helpers for the guest's calendar.
+ */
 
 export function toISODate(value: Date | string): string {
   if (typeof value === "string") return value.slice(0, 10);
-  const copy = new Date(value.getTime() - value.getTimezoneOffset() * 60000);
-  return copy.toISOString().slice(0, 10);
+  return value.toISOString().slice(0, 10);
 }
 
 export function today(): string {
   return toISODate(new Date());
 }
+
 
 /** Nights of a stay: check-in included, check-out excluded. */
 export function stayNights(from: string, to: string): string[] {
