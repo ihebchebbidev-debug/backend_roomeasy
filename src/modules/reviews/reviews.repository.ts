@@ -90,6 +90,63 @@ export async function listPropertyReviews(
   return { items: rows.map(mapReview), total: Number(count?.total ?? 0) };
 }
 
+export type ReviewHighlightDto = {
+  id: string;
+  author: string;
+  authorAvatar: string | null;
+  rating: number;
+  body: string;
+  propertyId: string;
+  propertyName: string;
+  city: string;
+  country: string;
+  date: string;
+};
+
+/**
+ * Real 5-star guest reviews used on the homepage. Nothing is invented: when no
+ * guest has written one yet, this returns an empty list and the section hides.
+ */
+export async function listReviewHighlights(limit = 5): Promise<ReviewHighlightDto[]> {
+  const rows = await query<{
+    id: string;
+    author_name: string;
+    author_avatar: string | null;
+    rating: number;
+    body: string;
+    property_id: string;
+    property_name: string;
+    city: string;
+    country: string;
+    created_on: string | Date;
+  }>(
+    `SELECT r.id, r.author_name, u.avatar_url AS author_avatar, r.rating, r.body,
+            r.property_id, p.name AS property_name, p.city, p.country, r.created_on
+       FROM review r
+       LEFT JOIN app_user u ON u.id = r.author_id
+       JOIN property p ON p.id = r.property_id
+      WHERE r.hidden = false AND r.rating >= 5 AND length(r.body) >= 60
+      ORDER BY r.created_on DESC, r.created_at DESC
+      LIMIT $1`,
+    [limit],
+    { label: "reviews.highlights" },
+  );
+
+  return rows.map((row) => ({
+    id: row.id,
+    author: row.author_name,
+    authorAvatar: row.author_avatar,
+    rating: row.rating,
+    body: row.body,
+    propertyId: row.property_id,
+    propertyName: row.property_name,
+    city: row.city,
+    country: row.country,
+    date:
+      typeof row.created_on === "string" ? row.created_on.slice(0, 10) : row.created_on.toISOString().slice(0, 10),
+  }));
+}
+
 export async function findReview(reviewId: string, options: { includeHidden?: boolean } = {}): Promise<ReviewDto | null> {
   const row = await queryOne<ReviewRow>(
     `${SELECT_REVIEW} WHERE r.id = $1${options.includeHidden ? "" : " AND r.hidden = false"}`,

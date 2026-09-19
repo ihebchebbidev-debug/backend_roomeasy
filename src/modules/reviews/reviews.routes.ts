@@ -8,6 +8,7 @@ import {
   createReview,
   findReview,
   listReviewsByAuthor,
+  listReviewHighlights,
   listReviewsForHost,
   replyToReview,
   reviewableStays,
@@ -19,6 +20,12 @@ export const reviewsRouter = Router();
 
 const reviewParams = z.object({ reviewId: z.string().trim().min(1).max(140) });
 const bodyText = z.string().trim().min(10, "Write at least 10 characters.").max(2000);
+
+/** Real guest reviews shown on the homepage. Public, no account needed. */
+reviewsRouter.get(
+  "/highlights",
+  asyncHandler(async (_req, res) => ok(res, await listReviewHighlights(5))),
+);
 
 /** A single review, readable by anyone. */
 reviewsRouter.get(

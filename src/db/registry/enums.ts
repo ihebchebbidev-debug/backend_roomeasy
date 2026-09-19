@@ -68,6 +68,7 @@ export const enums: EnumDef[] = [
       "ticket_status_changed",
       "ticket_action_taken",
       "commission_updated",
+      "account_deleted",
     ],
   },
   {

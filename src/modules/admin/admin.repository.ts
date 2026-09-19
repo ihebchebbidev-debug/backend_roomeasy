@@ -2,6 +2,7 @@ import { apiError } from "@/core/errors.js";
 import { payoutId as newPayoutId } from "@/core/ids.js";
 import { query, queryOne, transaction } from "@/db/query.js";
 import type { Role } from "@/middleware/auth.js";
+import { transferPayoutToHost } from "@/modules/payments/payouts.js";
 
 /**
  * Everything the admin console shows (`src/routes/admin.tsx`): the overview
@@ -711,6 +712,9 @@ export type PayoutDto = {
   payoutDate: string;
   bookings: string[];
   createdAt: string;
+  /** Stripe transfer reference, once the money has actually been sent. */
+  transferId: string | null;
+  paidAt: string | null;
 };
 
 type PayoutRow = {
@@ -723,6 +727,8 @@ type PayoutRow = {
   payout_date: Date;
   bookings: string[] | null;
   created_at: Date;
+  stripe_transfer_id: string | null;
+  paid_at: Date | null;
 };
 
 function mapPayout(row: PayoutRow): PayoutDto {
@@ -736,12 +742,14 @@ function mapPayout(row: PayoutRow): PayoutDto {
     payoutDate: row.payout_date.toISOString().slice(0, 10),
     bookings: row.bookings ?? [],
     createdAt: row.created_at.toISOString(),
+    transferId: row.stripe_transfer_id,
+    paidAt: row.paid_at ? row.paid_at.toISOString() : null,
   };
 }
 
 const PAYOUT_SELECT = `
   SELECT p.id, p.host_id, p.host_name, p.amount_usd, p.commission_usd, p.status::text AS status,
-         p.payout_date, p.created_at,
+         p.payout_date, p.created_at, p.stripe_transfer_id, p.paid_at,
          (SELECT array_agg(i.booking_id ORDER BY i.booking_id) FROM payout_item i WHERE i.payout_id = p.id) AS bookings
     FROM payout p`;
 
@@ -810,6 +818,13 @@ export async function createPayoutForHost(hostId: string, payoutDate?: string): 
         WHERE p.host_id = $1
           AND b.status = 'completed'
           AND NOT EXISTS (SELECT 1 FROM payout_item i WHERE i.booking_id = b.id)
+          -- Stays already paid straight to the host at checkout are settled.
+          AND NOT EXISTS (
+            SELECT 1 FROM payment pay
+             WHERE pay.booking_id = b.id
+               AND pay.host_settled
+               AND pay.status IN ('authorized', 'paid')
+          )
         ORDER BY b.check_out`,
       [hostId],
       { client, label: "admin.payoutEligible" },
@@ -860,7 +875,24 @@ export async function markPayoutPaid(payoutId: string): Promise<PayoutDto> {
     throw apiError("CONFLICT", { message: "This payout has already been marked as paid.", details: { payoutId } });
   }
 
-  await query(`UPDATE payout SET status = 'paid' WHERE id = $1`, [payoutId], { label: "admin.markPayoutPaid" });
+  // Send the money first: a Stripe failure must never leave the register
+  // claiming the host was paid. Returns null when Stripe is not configured,
+  // in which case the payout stays a bookkeeping-only record.
+  const transferId = await transferPayoutToHost({
+    payoutId,
+    hostId: current.host_id,
+    amountUsd: Number(current.amount_usd),
+  });
+
+  await query(
+    `UPDATE payout
+        SET status = 'paid',
+            paid_at = now(),
+            stripe_transfer_id = COALESCE($2, stripe_transfer_id)
+      WHERE id = $1`,
+    [payoutId, transferId],
+    { label: "admin.markPayoutPaid" },
+  );
   const row = await queryOne<PayoutRow>(`${PAYOUT_SELECT} WHERE p.id = $1`, [payoutId], {
     label: "admin.readPayout",
   });

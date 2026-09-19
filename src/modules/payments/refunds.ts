@@ -12,9 +12,42 @@ export async function refundThroughStripe(bookingId: string, amountUsd: number):
   if (!payment || (!payment.intentId && !payment.chargeId)) return;
 
   const stripe = requireStripe();
+
+  // Money still only held on the card was never taken: release the hold
+  // instead of refunding a charge that does not exist.
+  if (payment.intentId) {
+    const intent = await stripe.paymentIntents.retrieve(payment.intentId);
+    if (
+      intent.status === "requires_capture" ||
+      intent.status === "requires_payment_method" ||
+      intent.status === "requires_confirmation" ||
+      intent.status === "requires_action"
+    ) {
+      await stripe.paymentIntents.cancel(payment.intentId, { cancellation_reason: "requested_by_customer" });
+      return;
+    }
+    if (intent.status === "canceled") return;
+  }
+
   await stripe.refunds.create({
     ...(payment.intentId ? { payment_intent: payment.intentId } : { charge: payment.chargeId as string }),
     amount: toMinorUnits(Math.min(amountUsd, payment.amountUsd)),
     metadata: { bookingId },
   });
+}
+
+/**
+ * Takes the money that was only held on the guest's card. Called when the host
+ * accepts a request; a booking paid outright (instant book) is already
+ * captured and is left untouched.
+ */
+export async function capturePaymentForBooking(bookingId: string): Promise<void> {
+  if (!stripeEnabled()) return;
+  const payment = await stripePaymentForBooking(bookingId);
+  if (!payment?.intentId) return;
+
+  const stripe = requireStripe();
+  const intent = await stripe.paymentIntents.retrieve(payment.intentId);
+  if (intent.status !== "requires_capture") return;
+  await stripe.paymentIntents.capture(payment.intentId, {}, { idempotencyKey: `capture_${payment.intentId}` });
 }

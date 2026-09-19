@@ -68,7 +68,9 @@ paymentsRouter.post(
       amount,
       currency: (booking.currency || env.PAYMENT_CURRENCY).toLowerCase(),
       automatic_payment_methods: { enabled: true },
-      capture_method: "automatic",
+      // A request the host can still refuse is only held on the card: the
+      // money is taken when the host accepts, and released if they refuse.
+      capture_method: booking.instantBook ? "automatic" : "manual",
       description: `${booking.propertyName} — ${booking.reference}`,
       receipt_email: booking.guestEmail ?? undefined,
       metadata: {
@@ -89,6 +91,9 @@ paymentsRouter.post(
       bookingId: booking.id,
       intentId: intent.id,
       amount: booking.totalUsd,
+      // A destination charge already pays the host, so the payout register
+      // must skip this booking later on.
+      hostSettled: canSplit,
     });
 
     return ok(res, {
@@ -98,6 +103,7 @@ paymentsRouter.post(
       currency: booking.currency,
       commissionUsd: commission / 100,
       splitToHost: canSplit,
+      holdOnly: !booking.instantBook,
     });
   }),
 );

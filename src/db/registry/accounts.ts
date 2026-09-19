@@ -35,6 +35,12 @@ export const accountTables: TableDef[] = [
       { name: "two_factor_enabled", type: "boolean", notNull: true, default: "false" },
       { name: "joined_on", type: "date", notNull: true, default: "CURRENT_DATE" },
       { name: "last_login_at", type: "timestamptz" },
+      {
+        name: "deleted_at",
+        type: "timestamptz",
+        note: "GDPR erasure: the row stays for accounting links but holds no personal data any more.",
+      },
+      { name: "deletion_reason", type: "text", note: "Optional reason given by the member when asking for erasure." },
       { name: "created_at", type: "timestamptz", notNull: true, default: "now()" },
       { name: "updated_at", type: "timestamptz", notNull: true, default: "now()" },
     ],

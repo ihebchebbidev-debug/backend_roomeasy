@@ -16,6 +16,8 @@ export type PayableBooking = {
   commissionRate: number;
   stripeAccountId: string | null;
   payoutsOnboarded: boolean;
+  /** Instant-book stays confirm on payment; others need the host's answer. */
+  instantBook: boolean;
 };
 
 /** Everything the Stripe layer needs about one booking, in a single round trip. */
@@ -35,12 +37,13 @@ export async function payableBooking(idOrReference: string): Promise<PayableBook
     commission_rate: string;
     stripe_account_id: string | null;
     payouts_onboarded: boolean;
+    instant_book: boolean;
   }>(
     `SELECT b.id, b.reference, b.guest_id, b.guest_email, b.guest_name, b.status::text AS status,
             b.currency, b.total_usd, p.name AS property_name,
             hp.user_id AS host_id, hu.email AS host_email,
             COALESCE(hc.commission_rate, ps.commission_rate) AS commission_rate,
-            hp.stripe_account_id, hp.payouts_onboarded
+            hp.stripe_account_id, hp.payouts_onboarded, p.instant_book
        FROM booking b
        JOIN property p ON p.id = b.property_id
        JOIN host_profile hp ON hp.user_id = p.host_id
@@ -69,6 +72,7 @@ export async function payableBooking(idOrReference: string): Promise<PayableBook
     commissionRate: Number(row.commission_rate),
     stripeAccountId: row.stripe_account_id,
     payoutsOnboarded: row.payouts_onboarded,
+    instantBook: row.instant_book,
   };
 }
 
@@ -81,16 +85,20 @@ export async function recordStripePayment(input: {
   brand?: string;
   last4?: string;
   chargeId?: string | null;
+  /** True when the charge itself already routed the host share to the host. */
+  hostSettled?: boolean;
 }): Promise<void> {
   await query(
     `INSERT INTO payment (booking_id, method, brand, last4, status, amount_usd, reference,
-                          stripe_payment_intent_id, stripe_charge_id)
-     VALUES ($1, 'card', $2::card_brand, $3, $4::payment_status, $5, $6, $6, $7)
+                          stripe_payment_intent_id, stripe_charge_id, host_settled)
+     VALUES ($1, 'card', $2::card_brand, $3, $4::payment_status, $5, $6, $6, $7, $8)
      ON CONFLICT (reference) DO UPDATE
         SET status = EXCLUDED.status,
             brand = EXCLUDED.brand,
             last4 = EXCLUDED.last4,
-            stripe_charge_id = COALESCE(EXCLUDED.stripe_charge_id, payment.stripe_charge_id)`,
+            stripe_charge_id = COALESCE(EXCLUDED.stripe_charge_id, payment.stripe_charge_id),
+            -- Once a charge has paid the host directly it stays settled.
+            host_settled = payment.host_settled OR EXCLUDED.host_settled`,
     [
       input.bookingId,
       input.brand ?? "card",
@@ -99,6 +107,7 @@ export async function recordStripePayment(input: {
       input.amount,
       input.intentId,
       input.chargeId ?? null,
+      input.hostSettled ?? false,
     ],
     { label: "payments.record" },
   );
@@ -156,16 +165,19 @@ export async function attachIntentToPendingPayment(input: {
   bookingId: string;
   intentId: string;
   amount: number;
+  /** True when this intent pays the host share straight to their account. */
+  hostSettled?: boolean;
 }): Promise<void> {
   const updated = await queryOne<{ id: string }>(
     `UPDATE payment
         SET stripe_payment_intent_id = $2,
             reference = $2,
-            amount_usd = $3
+            amount_usd = $3,
+            host_settled = payment.host_settled OR $4
       WHERE booking_id = $1
         AND status = 'pending'
       RETURNING id`,
-    [input.bookingId, input.intentId, input.amount],
+    [input.bookingId, input.intentId, input.amount, input.hostSettled ?? false],
     { label: "payments.attachIntent" },
   );
   if (updated) return;
@@ -174,6 +186,7 @@ export async function attachIntentToPendingPayment(input: {
     intentId: input.intentId,
     status: "pending",
     amount: input.amount,
+    hostSettled: input.hostSettled ?? false,
   });
 }
 

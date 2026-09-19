@@ -75,6 +75,8 @@ async function handleEvent(event: Stripe.Event): Promise<void> {
           brand: card?.card?.brand,
           last4: card?.card?.last4,
           chargeId: typeof intent.latest_charge === "string" ? intent.latest_charge : null,
+          // Destination charge: the host share left with the charge itself.
+          hostSettled: Boolean(intent.transfer_data?.destination),
         });
         // Paying never overrides the host's decision: only an instant-book
         // stay confirms itself. A request stays `pending` until the host
@@ -92,6 +94,28 @@ async function handleEvent(event: Stripe.Event): Promise<void> {
         await confirmBookingPaid(intent.id);
       }
       logger.info({ intent: intent.id, bookingId }, "payment succeeded");
+      break;
+    }
+
+    // Manual capture: the card is only held. Record the authorisation so the
+    // booking shows as covered while the host decides.
+    case "payment_intent.amount_capturable_updated": {
+      const intent = event.data.object as Stripe.PaymentIntent;
+      const bookingId = intent.metadata?.["bookingId"] ?? null;
+      if (bookingId) {
+        const card = intent.payment_method as unknown as { card?: { brand?: string; last4?: string } } | null;
+        await recordStripePayment({
+          bookingId,
+          intentId: intent.id,
+          status: "authorized",
+          amount: fromMinorUnits(intent.amount_capturable || intent.amount),
+          brand: card?.card?.brand,
+          last4: card?.card?.last4,
+          chargeId: typeof intent.latest_charge === "string" ? intent.latest_charge : null,
+          hostSettled: Boolean(intent.transfer_data?.destination),
+        });
+      }
+      logger.info({ intent: intent.id, bookingId }, "payment authorised (held)");
       break;
     }
 

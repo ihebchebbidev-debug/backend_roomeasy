@@ -9,7 +9,7 @@ import { refundFor, type CancellationPolicy } from "@/domain/cancellation.js";
 import { authorizeCard, type CardInput } from "@/domain/cards.js";
 import { computeQuote, type PriceBreakdown } from "@/domain/pricing.js";
 import { calendarMap } from "@/modules/listings/calendar.repository.js";
-import { refundThroughStripe } from "@/modules/payments/refunds.js";
+import { capturePaymentForBooking, refundThroughStripe } from "@/modules/payments/refunds.js";
 
 import { getHostRateRules, getPlatformSettings } from "@/modules/settings/settings.repository.js";
 
@@ -738,6 +738,10 @@ export async function decideBooking(input: {
   // so the database is never marked "refunded" for money that never moved.
   if (input.decision === "declined") {
     await refundThroughStripe(booking.id, booking.price.totalUsd);
+  } else {
+    // Accepting is the moment the money is actually taken: until now it was
+    // only held on the guest's card.
+    await capturePaymentForBooking(booking.id);
   }
 
   const row = await transaction(async (client) => {

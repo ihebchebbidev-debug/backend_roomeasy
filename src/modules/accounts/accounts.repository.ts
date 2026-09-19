@@ -96,16 +96,20 @@ export function mapAccount(row: AccountRow): AccountDto {
 }
 
 export async function findAccountById(userId: string): Promise<AccountDto | null> {
-  const row = await queryOne<AccountRow>(`${accountSelect} WHERE u.id = $1 ${accountGroupBy}`, [userId], {
-    label: "accounts.findById",
-  });
+  const row = await queryOne<AccountRow>(
+    `${accountSelect} WHERE u.id = $1 AND u.deleted_at IS NULL ${accountGroupBy}`,
+    [userId],
+    { label: "accounts.findById" },
+  );
   return row ? mapAccount(row) : null;
 }
 
 export async function findAccountByEmail(email: string): Promise<AccountDto | null> {
-  const row = await queryOne<AccountRow>(`${accountSelect} WHERE lower(u.email) = lower($1) ${accountGroupBy}`, [email], {
-    label: "accounts.findByEmail",
-  });
+  const row = await queryOne<AccountRow>(
+    `${accountSelect} WHERE lower(u.email) = lower($1) AND u.deleted_at IS NULL ${accountGroupBy}`,
+    [email],
+    { label: "accounts.findByEmail" },
+  );
   return row ? mapAccount(row) : null;
 }
 
@@ -174,7 +178,8 @@ export async function createAccount(input: {
 /** Verifies the credentials and returns the account, or throws a typed error. */
 export async function verifyCredentials(email: string, plainPassword: string): Promise<AccountDto> {
   const row = await queryOne<{ id: string; password_hash: string | null; suspended: boolean; suspended_reason: string | null }>(
-    `SELECT id, password_hash, suspended, suspended_reason FROM app_user WHERE lower(email) = lower($1)`,
+    `SELECT id, password_hash, suspended, suspended_reason FROM app_user
+      WHERE lower(email) = lower($1) AND deleted_at IS NULL`,
     [email],
     { label: "accounts.verifyCredentials" },
   );
@@ -548,4 +553,121 @@ export async function resetPasswordForDev(userId: string, nextPassword: string):
   await query(`UPDATE app_user SET password_hash = $2 WHERE id = $1`, [userId, await hashPassword(nextPassword)], {
     label: "accounts.resetPasswordForDev",
   });
+}
+
+/**
+ * GDPR erasure (right to be forgotten).
+ *
+ * The account row itself is kept — bookings, payments and invoices must stay
+ * linked for accounting — but every piece of personal data is removed and the
+ * account can never be used again. Password confirmation is mandatory, and the
+ * request is refused while the member still has live obligations.
+ */
+export async function deleteOwnAccount(input: {
+  userId: string;
+  password: string;
+  reason?: string | null;
+}): Promise<{ deletedAt: string }> {
+  const row = await queryOne<{ id: string; email: string; full_name: string; password_hash: string | null; deleted_at: Date | null }>(
+    `SELECT id, email, full_name, password_hash, deleted_at FROM app_user WHERE id = $1`,
+    [input.userId],
+    { label: "accounts.deleteOwn.load" },
+  );
+  if (!row || row.deleted_at) throw apiError("NOT_FOUND", { message: "This account no longer exists." });
+  if (!row.password_hash) throw apiError("INVALID_CREDENTIALS", { message: "This account has no password set." });
+
+  const matches = await bcrypt.compare(input.password, row.password_hash);
+  if (!matches) {
+    throw apiError("INVALID_CREDENTIALS", {
+      message: "The password is incorrect.",
+      issues: [{ field: "password", message: "The password is incorrect." }],
+    });
+  }
+
+  // Live obligations block the erasure: a stay still to come, or money still
+  // owed to the host.
+  const blockers = await queryOne<{ stays: string; payouts: string }>(
+    `SELECT
+       (SELECT count(*) FROM booking b
+          LEFT JOIN property p ON p.id = b.property_id
+         WHERE b.status IN ('pending', 'confirmed')
+           AND b.check_out >= current_date
+           AND (b.guest_id = $1 OR p.host_id = $1)) AS stays,
+       (SELECT count(*) FROM payout WHERE host_id = $1 AND status = 'scheduled') AS payouts`,
+    [input.userId],
+    { label: "accounts.deleteOwn.blockers" },
+  );
+  if (Number(blockers?.stays ?? 0) > 0) {
+    throw apiError("CONFLICT", {
+      message:
+        "You still have a stay in progress or coming up. Once every booking is finished or cancelled, you can delete your account.",
+    });
+  }
+  if (Number(blockers?.payouts ?? 0) > 0) {
+    throw apiError("CONFLICT", {
+      message: "A payout is still on its way to you. You can delete your account once it has been sent.",
+    });
+  }
+
+  const deletedAt = await transaction(async (client) => {
+    const placeholder = `deleted-${row.id}@deleted.invalid`;
+
+    // Anything that only exists to serve this person goes.
+    await query(`DELETE FROM user_avatar WHERE user_id = $1`, [row.id], { client, label: "accounts.deleteOwn.avatar" });
+    await query(`DELETE FROM favorite WHERE user_id = $1`, [row.id], { client, label: "accounts.deleteOwn.favorites" });
+    await query(`DELETE FROM cookie_consent WHERE user_id = $1`, [row.id], { client, label: "accounts.deleteOwn.consent" });
+    await query(`DELETE FROM user_role_grant WHERE user_id = $1`, [row.id], { client, label: "accounts.deleteOwn.roles" });
+    await query(`DELETE FROM host_team_member WHERE host_id = $1`, [row.id], { client, label: "accounts.deleteOwn.team" });
+
+    // A host leaving takes their listings offline.
+    await query(
+      `UPDATE listing SET status = 'suspended'
+        WHERE property_id IN (SELECT id FROM property WHERE host_id = $1)`,
+      [row.id],
+      { client, label: "accounts.deleteOwn.unpublish" },
+    );
+
+    // Historic records keep their row, lose the personal details.
+    await query(
+      `UPDATE booking SET guest_name = 'Deleted account', guest_email = NULL, guest_phone = NULL, message = NULL
+        WHERE guest_id = $1`,
+      [row.id],
+      { client, label: "accounts.deleteOwn.bookings" },
+    );
+    await query(`UPDATE review SET author_name = 'Deleted account' WHERE author_id = $1`, [row.id], {
+      client,
+      label: "accounts.deleteOwn.reviews",
+    });
+
+    const updated = await queryOne<{ deleted_at: Date }>(
+      `UPDATE app_user SET
+         deleted_at         = now(),
+         deletion_reason    = $2,
+         full_name          = 'Deleted account',
+         email              = $3,
+         phone              = NULL,
+         password_hash      = NULL,
+         avatar_url         = NULL,
+         two_factor_enabled = false,
+         verified           = false,
+         suspended          = true,
+         suspended_reason   = 'Account deleted at the member''s request'
+       WHERE id = $1
+       RETURNING deleted_at`,
+      [row.id, input.reason ?? null, placeholder],
+      { client, label: "accounts.deleteOwn.anonymise" },
+    );
+
+    // Audit trail for the back office (no personal data beyond the account id).
+    await query(
+      `INSERT INTO moderation_log (admin_id, action, target_kind, target_id, reason)
+       VALUES (NULL, 'account_deleted', 'user', $1, $2)`,
+      [row.id, input.reason ?? "Erasure requested by the member"],
+      { client, label: "accounts.deleteOwn.audit" },
+    );
+
+    return updated?.deleted_at ?? new Date();
+  }, "accounts.deleteOwnAccount");
+
+  return { deletedAt: deletedAt.toISOString() };
 }
