@@ -200,7 +200,7 @@ paymentsRouter.post(
       accountId = account.id;
       await setHostStripeAccount({
         hostId: user.userId,
-        accountId,
+        accountId: account.id,
         chargesEnabled: false,
         payoutsEnabled: false,
         detailsSubmitted: false,
@@ -211,8 +211,8 @@ paymentsRouter.post(
     const link = await stripe.accountLinks.create({
       account: accountId,
       type: "account_onboarding",
-      refresh_url: `${env.APP_PUBLIC_URL}/host/payouts?stripe=refresh`,
-      return_url: `${env.APP_PUBLIC_URL}/host/payouts?stripe=done`,
+      refresh_url: `${env.APP_PUBLIC_URL}/host?section=payouts&stripe=refresh`,
+      return_url: `${env.APP_PUBLIC_URL}/host?section=payouts&stripe=done`,
     });
 
     return ok(res, { url: link.url, accountId, expiresAt: new Date(link.expires_at * 1000).toISOString() });
