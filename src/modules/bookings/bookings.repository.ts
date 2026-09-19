@@ -4,6 +4,7 @@ import { env } from "@/config/env.js";
 import { daysBetween, stayNights, today } from "@/core/dates.js";
 import { apiError } from "@/core/errors.js";
 import { bookingId as newBookingId, bookingReference, paymentIntentReference } from "@/core/ids.js";
+import { logger } from "@/core/logger.js";
 import { query, queryOne, transaction } from "@/db/query.js";
 import { refundFor, type CancellationPolicy } from "@/domain/cancellation.js";
 import { authorizeCard, type CardInput } from "@/domain/cards.js";
@@ -734,6 +735,23 @@ export async function decideBooking(input: {
     });
   }
 
+  // Nothing is taken from the card before we know the nights are still free:
+  // a first check here, and the authoritative one inside the transaction.
+  if (input.decision === "confirmed") {
+    const availability = await checkAvailability({
+      propertyId: booking.propertyId,
+      from: booking.checkIn,
+      to: booking.checkOut,
+      ignoreBookingId: booking.id,
+    });
+    if (availability.conflictingBookings.length) {
+      throw apiError("UNAVAILABLE", {
+        message: "Another confirmed booking now covers those nights.",
+        details: { conflictingBookings: availability.conflictingBookings },
+      });
+    }
+  }
+
   // A declined request gives the guest everything back — through Stripe first,
   // so the database is never marked "refunded" for money that never moved.
   if (input.decision === "declined") {
@@ -744,7 +762,9 @@ export async function decideBooking(input: {
     await capturePaymentForBooking(booking.id);
   }
 
-  const row = await transaction(async (client) => {
+  const run = async () =>
+    transaction(async (client) => {
+
 
     if (input.decision === "confirmed") {
       // Re-check now: another request may have taken the nights while pending.
@@ -793,6 +813,25 @@ export async function decideBooking(input: {
     const updated = await queryOne<BookingRow>(`${SELECT_BOOKING} WHERE b.id = $1`, [booking.id], { client });
     return updated!;
   }, "bookings.decide");
+
+  let row: BookingRow;
+  try {
+    row = await run();
+  } catch (error) {
+    // The money already moved. If writing the decision failed, put it back so
+    // a guest is never charged for a stay that stayed pending.
+    if (input.decision === "confirmed") {
+      try {
+        await refundThroughStripe(booking.id, booking.price.totalUsd);
+      } catch (refundError) {
+        logger.error(
+          { bookingId: booking.id, err: refundError },
+          "captured payment could not be refunded after a failed booking decision",
+        );
+      }
+    }
+    throw error;
+  }
 
   return mapBooking(row);
 }

@@ -113,12 +113,36 @@ export async function recordStripePayment(input: {
   );
 }
 
+/**
+ * Records money sent back. A partial refund keeps the payment where it is and
+ * only stores the amount returned: "refunded" means the whole charge went back.
+ */
 export async function markPaymentRefunded(intentId: string, refundedAmount: number): Promise<void> {
   await query(
-    `UPDATE payment SET status = 'refunded', refunded_usd = $2 WHERE stripe_payment_intent_id = $1`,
+    `UPDATE payment
+        SET refunded_usd = $2,
+            status = CASE WHEN $2 >= amount_usd THEN 'refunded'::payment_status ELSE status END
+      WHERE stripe_payment_intent_id = $1`,
     [intentId, refundedAmount],
     { label: "payments.refunded" },
   );
+}
+
+/**
+ * The PaymentIntent already attached to a booking's pending payment, so a
+ * guest who reloads the checkout resumes it instead of leaving a stray hold.
+ */
+export async function pendingIntentForBooking(bookingId: string): Promise<string | null> {
+  const row = await queryOne<{ stripe_payment_intent_id: string | null }>(
+    `SELECT stripe_payment_intent_id
+       FROM payment
+      WHERE booking_id = $1 AND status = 'pending' AND stripe_payment_intent_id IS NOT NULL
+      ORDER BY created_at DESC
+      LIMIT 1`,
+    [bookingId],
+    { label: "payments.pendingIntent" },
+  );
+  return row?.stripe_payment_intent_id ?? null;
 }
 
 /**

@@ -11,6 +11,7 @@ import {
   attachIntentToPendingPayment,
   hostStripeAccount,
   payableBooking,
+  pendingIntentForBooking,
   setHostStripeAccount,
 } from "@/modules/payments/payments.repository.js";
 import { requireStripe, stripeEnabled, stripeStatus, toMinorUnits } from "@/modules/payments/stripe.client.js";
@@ -63,6 +64,32 @@ paymentsRouter.post(
     const amount = toMinorUnits(booking.totalUsd);
     const commission = toMinorUnits((booking.totalUsd * booking.commissionRate) / 100);
     const canSplit = Boolean(booking.stripeAccountId) && booking.payoutsOnboarded;
+
+    // A guest who reloads the checkout resumes the intent already attached to
+    // this booking, instead of leaving an unused hold behind on their card.
+    const existingId = await pendingIntentForBooking(booking.id);
+    if (existingId) {
+      const existing = await stripe.paymentIntents.retrieve(existingId).catch(() => null);
+      const reusable =
+        existing &&
+        existing.amount === amount &&
+        ["requires_payment_method", "requires_confirmation", "requires_action"].includes(existing.status);
+      if (reusable && existing) {
+        return ok(res, {
+          clientSecret: existing.client_secret,
+          intentId: existing.id,
+          amount: booking.totalUsd,
+          currency: booking.currency,
+          commissionUsd: commission / 100,
+          splitToHost: canSplit,
+          holdOnly: !booking.instantBook,
+        });
+      }
+      // Not usable any more: release it so no stray hold stays on the card.
+      if (existing && ["requires_payment_method", "requires_confirmation", "requires_action"].includes(existing.status)) {
+        await stripe.paymentIntents.cancel(existing.id).catch(() => undefined);
+      }
+    }
 
     const intent = await stripe.paymentIntents.create({
       amount,

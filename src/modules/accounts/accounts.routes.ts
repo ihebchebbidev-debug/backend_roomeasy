@@ -13,6 +13,7 @@ import {
   changePassword,
   createAccount,
   createPasswordResetCode,
+  deleteOwnAccount,
   exchangeResetCodeForTicket,
   findAvatar,
   findAccountById,
@@ -229,6 +230,30 @@ accountsRouter.post(
     return ok(res, account);
   }),
 );
+
+/**
+ * GDPR erasure. The password is required, the member is told why it is refused
+ * when a stay or a payout is still live, and the token dies with the account.
+ */
+accountsRouter.delete(
+  "/me",
+  requireAuth,
+  authLimiter,
+  asyncHandler(async (req, res) => {
+    const body = validateBody(
+      z.object({
+        password: z.string().min(1, "Enter your password to confirm."),
+        reason: z.string().trim().max(500).optional(),
+      }),
+      req,
+    );
+    const userId = currentUser(req).userId;
+    const result = await deleteOwnAccount({ userId, password: body.password, reason: body.reason ?? null });
+    req.log.info({ userId }, "account erased at the member's request");
+    return ok(res, result);
+  }),
+);
+
 
 accountsRouter.get(
   "/me/trust-badges",

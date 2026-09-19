@@ -10,6 +10,7 @@ import {
   destinationCoords,
   findPropertyById,
   searchProperties,
+  unavailablePropertyIds,
   type SearchFilters,
 } from "@/modules/properties/properties.repository.js";
 import { listPropertyReviews } from "@/modules/reviews/reviews.repository.js";
@@ -103,6 +104,24 @@ propertiesRouter.get(
   asyncHandler(async (req, res) => {
     const input = validateQuery(searchQuerySchema, req);
     return ok(res, await countByCategory(await toFilters(input)));
+  }),
+);
+
+/**
+ * Stays that are NOT free for a date range. Declared before "/:id" so the word
+ * "unavailable" is not read as a stay id.
+ */
+propertiesRouter.get(
+  "/unavailable",
+  asyncHandler(async (req, res) => {
+    const { from, to } = validateQuery(z.object({ from: isoDate, to: isoDate }), req);
+    if (to <= from) {
+      throw apiError("INVALID_DATES", {
+        issues: [{ field: "to", message: "Check-out must be after check-in." }],
+        details: { from, to },
+      });
+    }
+    return ok(res, await unavailablePropertyIds(from, to));
   }),
 );
 

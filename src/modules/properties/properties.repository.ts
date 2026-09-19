@@ -335,6 +335,27 @@ export async function searchProperties(filters: SearchFilters): Promise<{ items:
   return { items: rows.map(mapProperty), total: Number(countRow?.total ?? 0) };
 }
 
+/**
+ * Ids of the stays that cannot take those nights: a night blocked on the host
+ * calendar, or a live booking overlapping the range. The search page uses it
+ * to hide stays that are not free for the dates the guest picked.
+ */
+export async function unavailablePropertyIds(from: string, to: string): Promise<string[]> {
+  const rows = await query<{ id: string }>(
+    `SELECT DISTINCT cn.property_id AS id
+       FROM calendar_night cn
+      WHERE cn.blocked = true AND cn.night >= $1::date AND cn.night < $2::date
+      UNION
+     SELECT DISTINCT b.property_id AS id
+       FROM booking b
+      WHERE b.status IN ('pending', 'confirmed', 'completed')
+        AND daterange(b.check_in, b.check_out, '[)') && daterange($1::date, $2::date, '[)')`,
+    [from, to],
+    { label: "properties.unavailable" },
+  );
+  return rows.map((row) => row.id);
+}
+
 export async function countByCategory(filters: SearchFilters): Promise<Record<string, number>> {
   const where = buildWhere({ ...filters, category: undefined }, 1);
   const whereSql = where.clauses.length ? `WHERE ${where.clauses.join("\n      AND ")}` : "";

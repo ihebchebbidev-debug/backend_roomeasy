@@ -105,21 +105,38 @@ export async function saveCalendarNights(
 ): Promise<CalendarNight[]> {
   if (!nights.length) return [];
 
+  // Only the fields the caller actually sent are written. Sending just a price
+  // must not unblock the night, and blocking a night must not wipe its price
+  // override, so each field carries a "was it provided" flag.
   await query(
-    `INSERT INTO calendar_night (property_id, night, blocked, price_usd, note, updated_at)
-     SELECT $1, night::date, blocked, price_usd, note, now()
-       FROM unnest($2::date[], $3::boolean[], $4::numeric[], $5::text[]) AS t(night, blocked, price_usd, note)
-     ON CONFLICT (property_id, night) DO UPDATE
-       SET blocked   = coalesce(excluded.blocked, calendar_night.blocked),
-           price_usd = excluded.price_usd,
-           note      = excluded.note,
-           updated_at = now()`,
+    `WITH input AS (
+       SELECT night::date AS night, blocked, set_blocked, price_usd, set_price, note, set_note
+         FROM unnest($2::date[], $3::boolean[], $4::boolean[], $5::numeric[], $6::boolean[], $7::text[], $8::boolean[])
+                AS t(night, blocked, set_blocked, price_usd, set_price, note, set_note)
+     ),
+     updated AS (
+       UPDATE calendar_night c
+          SET blocked    = CASE WHEN i.set_blocked THEN coalesce(i.blocked, false) ELSE c.blocked END,
+              price_usd  = CASE WHEN i.set_price THEN i.price_usd ELSE c.price_usd END,
+              note       = CASE WHEN i.set_note THEN i.note ELSE c.note END,
+              updated_at = now()
+         FROM input i
+        WHERE c.property_id = $1 AND c.night = i.night
+        RETURNING c.night
+     )
+     INSERT INTO calendar_night (property_id, night, blocked, price_usd, note, updated_at)
+     SELECT $1, i.night, coalesce(i.blocked, false), i.price_usd, i.note, now()
+       FROM input i
+      WHERE NOT EXISTS (SELECT 1 FROM updated u WHERE u.night = i.night)`,
     [
       propertyId,
       nights.map((entry) => entry.night),
-      nights.map((entry) => entry.blocked ?? false),
+      nights.map((entry) => entry.blocked ?? null),
+      nights.map((entry) => entry.blocked !== undefined),
       nights.map((entry) => entry.priceUsd ?? null),
+      nights.map((entry) => "priceUsd" in entry),
       nights.map((entry) => entry.note ?? null),
+      nights.map((entry) => "note" in entry),
     ],
     { label: "calendar.save" },
   );
