@@ -79,7 +79,7 @@ paymentsRouter.post(
           clientSecret: existing.client_secret,
           intentId: existing.id,
           amount: booking.totalUsd,
-          currency: booking.currency,
+          currency: env.PAYMENT_CURRENCY,
           commissionUsd: commission / 100,
           splitToHost: canSplit,
           holdOnly: !booking.instantBook,
@@ -93,7 +93,7 @@ paymentsRouter.post(
 
     const intent = await stripe.paymentIntents.create({
       amount,
-      currency: (booking.currency || env.PAYMENT_CURRENCY).toLowerCase(),
+      currency: env.PAYMENT_CURRENCY.toLowerCase(),
       automatic_payment_methods: { enabled: true },
       // A request the host can still refuse is only held on the card: the
       // money is taken when the host accepts, and released if they refuse.
@@ -127,7 +127,7 @@ paymentsRouter.post(
       clientSecret: intent.client_secret,
       intentId: intent.id,
       amount: booking.totalUsd,
-      currency: booking.currency,
+      currency: env.PAYMENT_CURRENCY,
       commissionUsd: commission / 100,
       splitToHost: canSplit,
       holdOnly: !booking.instantBook,
@@ -186,13 +186,19 @@ paymentsRouter.post(
     if (!stripeEnabled()) throw apiError("CONFLICT", { message: "Payouts are not configured yet." });
     const user = currentUser(req);
     const stripe = requireStripe();
+    // France by default (the platform is French); a host based elsewhere can
+    // send their own country, which Stripe then fixes on the account.
+    const { country } = validateBody(
+      z.object({ country: z.string().trim().length(2).toUpperCase().optional() }),
+      req,
+    );
 
     let accountId = (await hostStripeAccount(user.userId))?.accountId ?? null;
     if (!accountId) {
       const account = await stripe.accounts.create({
         type: "express",
         email: user.email,
-        country: env.STRIPE_CONNECT_COUNTRY || undefined,
+        country: country || env.STRIPE_CONNECT_COUNTRY || undefined,
         capabilities: { card_payments: { requested: true }, transfers: { requested: true } },
         business_type: "individual",
         metadata: { hostId: user.userId },

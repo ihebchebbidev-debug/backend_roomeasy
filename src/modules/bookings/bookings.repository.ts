@@ -48,9 +48,9 @@ export type BookingDto = {
   guests: number;
   status: BookingStatus;
   isMobileBooking: boolean;
-  currency: "USD";
+  currency: "EUR";
   price: {
-    currency: "USD";
+    currency: "EUR";
     nightly: number;
     nights: number;
     baseSubtotal: number;
@@ -176,9 +176,9 @@ function mapBooking(row: BookingRow): BookingDto {
     guests: row.guests,
     status: row.status,
     isMobileBooking: row.is_mobile_booking,
-    currency: "USD",
+    currency: "EUR",
     price: {
-      currency: "USD",
+      currency: "EUR",
       nightly,
       nights,
       baseSubtotal: Number(row.base_subtotal),

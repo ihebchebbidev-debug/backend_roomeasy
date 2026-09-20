@@ -64,9 +64,9 @@ const envSchema = z.object({
   STRIPE_SECRET_KEY: z.string().default(""),
   STRIPE_PUBLISHABLE_KEY: z.string().default(""),
   STRIPE_WEBHOOK_SECRET: z.string().default(""),
-  STRIPE_CONNECT_COUNTRY: z.string().default(""),
-  // Every amount in the system is stored in USD (booking.currency = 'USD').
-  PAYMENT_CURRENCY: z.string().length(3).default("USD"),
+  STRIPE_CONNECT_COUNTRY: z.string().default("FR"),
+  // Every amount in the system is stored in EUR (booking.currency = 'EUR').
+  PAYMENT_CURRENCY: z.string().length(3).default("EUR"),
 
 
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace"]).default("info"),

@@ -2,26 +2,26 @@ import { log } from "@/core/logger.js";
 import { listExchangeRates, saveExchangeRates } from "@/modules/settings/settings.repository.js";
 
 /**
- * USD-based exchange rates. The app shows prices in USD, EUR, GBP, CHF and BRL
+ * EUR-based exchange rates. The app shows prices in EUR, USD, GBP, CHF and BRL
  * (`src/i18n/CurrencyProvider.tsx`), so those are the quotes kept fresh here.
  *
  * Rates come from the live provider and are cached in the `exchange_rate`
  * table. A refresh is attempted when the stored rates are older than
  * `MAX_AGE_MS`; if the provider is unreachable the last known live rates are
- * served, and if there are none only USD is quoted.
+ * served, and if there are none only EUR is quoted.
  */
 
 const logger = log("currency");
 
-export const SUPPORTED_CURRENCIES = ["USD", "EUR", "GBP", "CHF", "BRL"] as const;
+export const SUPPORTED_CURRENCIES = ["EUR", "USD", "GBP", "CHF", "BRL"] as const;
 export type SupportedCurrency = (typeof SUPPORTED_CURRENCIES)[number];
 
 const MAX_AGE_MS = 60 * 60 * 1000; // one hour
-const PROVIDER_URL = "https://api.frankfurter.app/latest?from=USD&to=EUR,GBP,CHF,BRL";
+const PROVIDER_URL = "https://api.frankfurter.app/latest?from=EUR&to=USD,GBP,CHF,BRL";
 const PROVIDER_TIMEOUT_MS = 5000;
 
 export type RatesPayload = {
-  base: "USD";
+  base: "EUR";
   rates: Record<string, number>;
   fetchedAt: string | null;
   source: "provider" | "cache" | "unavailable";
@@ -44,7 +44,7 @@ async function fetchFromProvider(): Promise<Record<string, number> | null> {
       logger.warn("exchange-rate provider returned an unexpected payload");
       return null;
     }
-    return { ...payload.rates, USD: 1 };
+    return { ...payload.rates, EUR: 1 };
   } catch (error) {
     logger.warn({ err: error }, "exchange-rate provider unreachable — serving cached rates");
     return null;
@@ -67,20 +67,20 @@ export async function getRates(options: { force?: boolean } = {}): Promise<Rates
     if (fresh) {
       await saveExchangeRates(fresh);
       logger.info({ quotes: Object.keys(fresh).length }, "exchange rates refreshed");
-      return { base: "USD", rates: { USD: 1, ...fresh }, fetchedAt: new Date().toISOString(), source: "provider" };
+      return { base: "EUR", rates: { EUR: 1, ...fresh }, fetchedAt: new Date().toISOString(), source: "provider" };
     }
   }
 
   if (stored.length) {
-    const rates: Record<string, number> = { USD: 1 };
+    const rates: Record<string, number> = { EUR: 1 };
     for (const row of stored) rates[row.quote] = row.rate;
-    return { base: "USD", rates, fetchedAt: newest, source: "cache" };
+    return { base: "EUR", rates, fetchedAt: newest, source: "cache" };
   }
 
   // No hardcoded rate table: a stale constant would quote guests a wrong
-  // price, so callers are told that only USD is available.
-  logger.warn("no exchange rates available — quoting USD only");
-  return { base: "USD", rates: { USD: 1 }, fetchedAt: null, source: "unavailable" };
+  // price, so callers are told that only EUR is available.
+  logger.warn("no exchange rates available — quoting EUR only");
+  return { base: "EUR", rates: { EUR: 1 }, fetchedAt: null, source: "unavailable" };
 }
 
 /** Converts a USD amount into another supported currency. */

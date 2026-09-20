@@ -16,7 +16,7 @@ export type DiscountKind = "longStay" | "mobile" | "lastMinute";
 export type PriceLine = { id: DiscountKind; percent: number; amount: number };
 
 export type PriceBreakdown = {
-  currency: "USD";
+  currency: "EUR";
   nightly: number;
   nights: number;
   baseSubtotal: number;
@@ -105,7 +105,7 @@ export function computeQuote(context: QuoteContext): PriceBreakdown {
   const taxes = round(subtotal * context.taxRate);
 
   return {
-    currency: "USD",
+    currency: "EUR",
     nightly: context.nightlyUsd,
     nights: nights.length,
     baseSubtotal: chargedBase,

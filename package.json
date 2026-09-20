@@ -13,6 +13,7 @@
     "build": "tsc -p tsconfig.json && tsc-alias",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "migrate": "tsx src/db/cli-migrate.ts",
+    "rebase:eur": "tsx src/db/cli-rebase-eur.ts",
     "seed": "tsx src/db/cli-seed.ts",
     "seed:demo": "tsx src/db/cli-seed-demo.ts",
     "test:api": "tsx src/tests/api-suite.ts",

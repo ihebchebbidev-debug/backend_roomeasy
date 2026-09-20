@@ -142,7 +142,7 @@ export async function createAccount(input: {
   const userId = await transaction(async (client) => {
     const created = await queryOne<{ id: string }>(
       `INSERT INTO app_user (full_name, email, phone, password_hash, locale, currency)
-       VALUES ($1, $2, $3, $4, coalesce($5, 'en'), coalesce($6, 'USD'))
+       VALUES ($1, $2, $3, $4, coalesce($5, 'en'), coalesce($6, 'EUR'))
        RETURNING id`,
       [input.fullName, input.email, input.phone ?? null, passwordHash, input.locale ?? null, input.currency ?? null],
       { client, label: "accounts.insert" },
