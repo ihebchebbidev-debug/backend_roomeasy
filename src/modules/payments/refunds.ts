@@ -29,9 +29,31 @@ export async function refundThroughStripe(bookingId: string, amountUsd: number):
     if (intent.status === "canceled") return;
   }
 
+  // Part of the money may already have been sent back (a partial refund, then
+  // a cancellation). Stripe rejects a refund larger than what is left on the
+  // charge, so only ever ask for the remaining amount.
+  let remainingMinor = toMinorUnits(payment.amountUsd);
+  try {
+    const chargeId =
+      payment.chargeId ??
+      (payment.intentId
+        ? ((await stripe.paymentIntents.retrieve(payment.intentId)).latest_charge as string | null)
+        : null);
+    if (chargeId) {
+      const charge = await stripe.charges.retrieve(chargeId);
+      remainingMinor = Math.max(0, (charge.amount_captured || charge.amount) - (charge.amount_refunded || 0));
+    }
+  } catch {
+    // Reading the charge is only an optimisation: fall back to the booking amount.
+  }
+  if (remainingMinor <= 0) return;
+
+  const amountMinor = Math.min(toMinorUnits(amountUsd), remainingMinor);
+  if (amountMinor <= 0) return;
+
   await stripe.refunds.create({
     ...(payment.intentId ? { payment_intent: payment.intentId } : { charge: payment.chargeId as string }),
-    amount: toMinorUnits(Math.min(amountUsd, payment.amountUsd)),
+    amount: amountMinor,
     metadata: { bookingId },
   });
 }

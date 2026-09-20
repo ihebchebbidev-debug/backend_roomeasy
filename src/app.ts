@@ -30,10 +30,21 @@ export function createApp(): Express {
   // CORS_ORIGINS lists the sites allowed to call the API. Left at "*" every
   // origin is reflected (handy in development); set it in production so a
   // random site cannot drive the API with a member's credentials.
+  // An entry may be an exact origin ("https://roomeasy.fr") or a wildcard host
+  // ("https://*.lovable.app"), so preview/staging subdomains keep working
+  // without listing each generated hostname.
+  const originAllowed = (origin: string): boolean =>
+    (corsOrigins as string[]).some((entry) => {
+      if (entry === origin) return true;
+      if (!entry.includes("*")) return false;
+      const pattern = new RegExp(`^${entry.split("*").map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("[^/]*")}$`);
+      return pattern.test(origin);
+    });
+
   const allowOrigin: cors.CorsOptions["origin"] =
     corsOrigins === "*"
       ? (_origin, callback) => callback(null, true)
-      : (origin, callback) => callback(null, !origin || corsOrigins.includes(origin));
+      : (origin, callback) => callback(null, !origin || originAllowed(origin));
 
   const corsOptions: cors.CorsOptions = {
     origin: allowOrigin,
