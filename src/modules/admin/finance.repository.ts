@@ -140,7 +140,7 @@ export async function financeLedger(filters: LedgerFilters): Promise<{ rows: Fin
   const listParams = [...params, filters.limit, filters.offset];
   const rows = await query<LedgerDbRow>(
     `SELECT b.id, b.reference, b.created_at, b.check_in, b.check_out, b.status::text AS status,
-            b.guest_name, p.host_id, hu.name AS host_name, p.name AS property_name, b.total_usd,
+            b.guest_name, p.host_id, hu.full_name AS host_name, p.name AS property_name, b.total_usd,
             COALESCE(hc.commission_rate, ps.commission_rate) AS commission_rate,
             pay.status AS payment_status, pay.method AS payment_method,
             pay.reference AS payment_reference, pay.refunded_usd
@@ -182,14 +182,14 @@ export async function commissionReport(range: { from?: string; to?: string }): P
     revenue_usd: string;
     paid_usd: string;
   }>(
-    `SELECT p.host_id, hu.name AS host_name, hu.email AS host_email,
+    `SELECT p.host_id, hu.full_name AS host_name, hu.email AS host_email,
             COALESCE(hc.commission_rate, ps.commission_rate) AS commission_rate,
             COUNT(*)::text AS bookings,
             COALESCE(SUM(b.total_usd), 0) AS revenue_usd,
             COALESCE(SUM(CASE WHEN pay.status = 'paid' THEN b.total_usd ELSE 0 END), 0) AS paid_usd
        ${BOOKING_BASE}
        ${where}
-      GROUP BY p.host_id, hu.name, hu.email, COALESCE(hc.commission_rate, ps.commission_rate)
+      GROUP BY p.host_id, hu.full_name, hu.email, COALESCE(hc.commission_rate, ps.commission_rate)
       ORDER BY revenue_usd DESC`,
     params,
     { label: "finance.commission-report" },
@@ -328,7 +328,7 @@ export async function bookingInvoice(bookingId: string): Promise<InvoiceData | n
     `SELECT b.id, b.reference, b.created_at, b.check_in, b.check_out, b.status::text AS status,
             b.guest_name, b.guest_email, b.guest_phone, b.nights, b.guests,
             b.nightly_usd, b.base_subtotal, b.subtotal, b.cleaning_fee, b.service_fee, b.taxes,
-            p.host_id, hu.name AS host_name, hu.email AS host_email, p.name AS property_name, b.total_usd,
+            p.host_id, hu.full_name AS host_name, hu.email AS host_email, p.name AS property_name, b.total_usd,
             COALESCE(hc.commission_rate, ps.commission_rate) AS commission_rate,
             pay.status AS payment_status, pay.method AS payment_method,
             pay.reference AS payment_reference, pay.refunded_usd

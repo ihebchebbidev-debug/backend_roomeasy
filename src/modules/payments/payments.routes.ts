@@ -94,7 +94,8 @@ paymentsRouter.post(
     const intent = await stripe.paymentIntents.create({
       amount,
       currency: env.PAYMENT_CURRENCY.toLowerCase(),
-      automatic_payment_methods: { enabled: true },
+      // Cards only: no Klarna, Amazon Pay or Satispay at checkout.
+      payment_method_types: ["card"],
       // A request the host can still refuse is only held on the card: the
       // money is taken when the host accepts, and released if they refuse.
       capture_method: booking.instantBook ? "automatic" : "manual",
