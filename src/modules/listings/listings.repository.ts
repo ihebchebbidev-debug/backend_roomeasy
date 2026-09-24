@@ -1,5 +1,5 @@
 import { apiError } from "@/core/errors.js";
-import { slugify } from "@/core/ids.js";
+import { slugify, uuid } from "@/core/ids.js";
 import { query, queryOne, transaction } from "@/db/query.js";
 import { assertEquipmentExists } from "@/modules/equipment/equipment.repository.js";
 
@@ -88,7 +88,10 @@ function timeOrNull(value: string): string | null {
 }
 
 export function normaliseIds(draft: ListingDraft): ListingDraft {
-  const propertyId = draft.propertyId.trim() || slugify(draft.title);
+  // New durable ids are generated on the trusted server. The title remains in
+  // the public URL for readability, while the UUID prevents cross-host
+  // collisions even when many listings share the same title.
+  const propertyId = draft.propertyId.trim() || `${slugify(draft.title)}-${uuid()}`;
   const listingId = draft.listingId.trim() || `hl-${propertyId}`;
   return { ...draft, propertyId, listingId };
 }
@@ -169,7 +172,7 @@ export async function saveListing(input: {
   }
 
   const savedAt = await transaction(async (client) => {
-    await query(
+    const property = await queryOne<{ id: string }>(
       `INSERT INTO property (
          id, host_id, name, category, summary, description, city, country, neighbourhood, postal_code,
          guests, rooms, beds, baths, area_sqm, base_price_usd, cleaning_fee_usd, min_nights,
@@ -188,7 +191,9 @@ export async function saveListing(input: {
          cancellation_policy = excluded.cancellation_policy, house_rules = excluded.house_rules,
          check_in = excluded.check_in, check_out = excluded.check_out, instant_book = excluded.instant_book,
          latitude = coalesce(excluded.latitude, property.latitude), longitude = coalesce(excluded.longitude, property.longitude),
-         updated_at = now()`,
+          updated_at = now()
+        WHERE property.host_id = $26 OR $27 = true
+        RETURNING id`,
       [
         draft.propertyId,
         input.hostId,
@@ -215,9 +220,14 @@ export async function saveListing(input: {
         draft.policies.instantBook,
         draft.location.lat ?? null,
         draft.location.lng ?? null,
+        input.hostId,
+        input.isAdmin,
       ],
       { client, label: "listings.upsertProperty" },
     );
+    if (!property) {
+      throw apiError("PROPERTY_ID_TAKEN", { details: { propertyId: draft.propertyId } });
+    }
 
     // Photos, amenities and equipment are replaced wholesale: the wizard always
     // sends the complete set.
