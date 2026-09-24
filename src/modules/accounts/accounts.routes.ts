@@ -126,7 +126,9 @@ accountsRouter.post(
   asyncHandler(async (req, res) => {
     const body = validateBody(loginSchema, req);
     const account = await verifyCredentials(body.email, body.password);
-    await assertSecondFactor(account.id, body.otp);
+    // Administrators sign in with their password only; second factor is not asked of them.
+    const isAdmin = (account.roles as string[] | undefined)?.includes("admin") ?? false;
+    if (!isAdmin) await assertSecondFactor(account.id, body.otp);
     req.log.info({ userId: account.id }, "sign-in succeeded");
     return ok(res, session(account));
   }),
