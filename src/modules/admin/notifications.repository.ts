@@ -1,22 +1,8 @@
 import { query, queryOne } from "@/db/query.js";
 
-export type NotificationTemplate =
-  | "listing_approved"
-  | "listing_rejected"
-  | "listing_suspended"
-  | "account_suspended"
-  | "account_restored"
-  | "account_banned"
-  | "identity_verified"
-  | "identity_rejected"
-  | "booking_cancelled_by_admin"
-  | "booking_refunded"
-  | "commission_updated"
-  | "support_reply"
-  | "payouts_ready"
-  | "booking_confirmed"
-  | "payment_failed"
-  | "password_reset";
+import type { TemplateKey } from "@/modules/notifications/templates.js";
+
+export type NotificationTemplate = TemplateKey;
 
 /**
  * Every administrator decision that affects a member is queued here as an

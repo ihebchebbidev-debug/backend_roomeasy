@@ -1,4 +1,5 @@
 import { isWeekendNight, stayNights, today } from "@/core/dates.js";
+import { computeNightPrice, type NightPriceResult, type SmartPricingRules } from "@/domain/smartPricingEngine.js";
 
 /**
  * The authoritative quote engine — a direct port of `src/lib/pricing.ts` so a
@@ -28,6 +29,8 @@ export type PriceBreakdown = {
   total: number;
   /** Informational: what the weekend rule would add if it were enabled. */
   weekendSurcharge: number;
+  /** Per-night explanation when smart pricing is active. */
+  nightsDetail?: NightPriceResult[];
 };
 
 export type QuoteContext = {
@@ -44,12 +47,31 @@ export type QuoteContext = {
   taxRate: number;
   isMobile: boolean;
   applyWeekend?: boolean;
+  /** Host smart-pricing rules; when any rule is on, nightly prices come from the engine. */
+  smart?: { rules: SmartPricingRules; occupancyPercent: number | null; gapNights: Set<string> } | null;
 };
+
+export function smartRulesActive(rules: SmartPricingRules): boolean {
+  return (
+    rules.weekend.enabled ||
+    rules.seasonal.some((period) => period.enabled) ||
+    rules.leadTime.earlyBird.enabled ||
+    rules.leadTime.lastMinute.enabled ||
+    rules.occupancy.enabled ||
+    rules.gapNight.enabled ||
+    rules.floorUsd !== null ||
+    rules.ceilingUsd !== null
+  );
+}
 
 const round = (value: number) => Math.round(value);
 
 export function computeQuote(context: QuoteContext): PriceBreakdown {
   const nights = stayNights(context.from, context.to);
+
+  if (context.smart && smartRulesActive(context.smart.rules)) {
+    return computeSmartQuote(context, nights, context.smart);
+  }
 
   const baseSubtotal = nights.reduce((sum, night) => {
     const override = context.calendar[night]?.priceUsd;
@@ -116,5 +138,51 @@ export function computeQuote(context: QuoteContext): PriceBreakdown {
     taxes,
     total: subtotal + cleaningFee + serviceFee + taxes,
     weekendSurcharge,
+  };
+}
+
+function computeSmartQuote(
+  context: QuoteContext,
+  nights: string[],
+  smart: NonNullable<QuoteContext["smart"]>,
+): PriceBreakdown {
+  const todayMs = new Date(`${today()}T00:00:00Z`).getTime();
+  const nightsDetail = nights.map((night) =>
+    computeNightPrice(smart.rules, {
+      date: night,
+      basePrice: context.nightlyUsd,
+      overridePrice: context.calendar[night]?.priceUsd ?? null,
+      daysAhead: Math.round((new Date(`${context.from}T00:00:00Z`).getTime() - todayMs) / 86_400_000),
+      occupancyPercent: smart.occupancyPercent,
+      isGapNight: smart.gapNights.has(night),
+    }),
+  );
+  const chargedBase = round(nightsDetail.reduce((sum, night) => sum + night.finalPrice, 0));
+
+  const discounts: PriceLine[] = [];
+  if (context.longStay.enabled && nights.length >= context.longStay.threshold && context.longStay.discount > 0) {
+    discounts.push({ id: "longStay", percent: context.longStay.discount, amount: round((chargedBase * context.longStay.discount) / 100) });
+  }
+  if (context.isMobile && context.mobile.enabled && context.mobile.discount > 0) {
+    discounts.push({ id: "mobile", percent: context.mobile.discount, amount: round((chargedBase * context.mobile.discount) / 100) });
+  }
+
+  const subtotal = Math.max(0, chargedBase - discounts.reduce((sum, line) => sum + line.amount, 0));
+  const cleaningFee = round(context.cleaningFeeUsd);
+  const serviceFee = round(subtotal * context.serviceFeeRate);
+  const taxes = round(subtotal * context.taxRate);
+  return {
+    currency: "EUR",
+    nightly: nights.length ? round(chargedBase / nights.length) : context.nightlyUsd,
+    nights: nights.length,
+    baseSubtotal: chargedBase,
+    discounts,
+    subtotal,
+    cleaningFee,
+    serviceFee,
+    taxes,
+    total: subtotal + cleaningFee + serviceFee + taxes,
+    weekendSurcharge: 0,
+    nightsDetail,
   };
 }

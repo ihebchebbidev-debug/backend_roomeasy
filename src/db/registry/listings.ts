@@ -182,6 +182,13 @@ export const listingTables: TableDef[] = [
         default: "5",
         check: "mobile_discount BETWEEN 0 AND 90",
       },
+      {
+        name: "smart_pricing_rules",
+        type: "jsonb",
+        notNull: true,
+        default: "'{}'::jsonb",
+        comment: "Per-listing smart-pricing rule set (see domain/smartPricingEngine.ts). Empty object = all rules off.",
+      },
       { name: "published_at", type: "timestamptz" },
       { name: "created_at", type: "timestamptz", notNull: true, default: "now()" },
       { name: "updated_at", type: "timestamptz", notNull: true, default: "now()" },

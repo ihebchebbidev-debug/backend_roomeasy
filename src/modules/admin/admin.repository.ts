@@ -625,11 +625,12 @@ export async function hostProfile(hostId: string): Promise<AdminHostProfile> {
     status: string;
     document_kind: string | null;
     document_reference: string | null;
+    document_files: string[] | null;
     notes: string | null;
     created_at: Date;
     decided_at: Date | null;
   }>(
-    `SELECT id, status::text AS status, document_kind, document_reference, notes, created_at, decided_at
+    `SELECT user_id as id, status::text AS status, document_kind, document_reference, document_files, notes, created_at, decided_at
        FROM identity_verification
       WHERE user_id = $1
       ORDER BY created_at DESC
@@ -693,6 +694,7 @@ export async function hostProfile(hostId: string): Promise<AdminHostProfile> {
       status: row.status,
       documentKind: row.document_kind,
       documentReference: row.document_reference,
+      documentFiles: row.document_files,
       notes: row.notes,
       createdAt: row.created_at.toISOString(),
       decidedAt: row.decided_at ? row.decided_at.toISOString() : null,

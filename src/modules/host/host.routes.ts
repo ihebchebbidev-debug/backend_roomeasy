@@ -18,6 +18,11 @@ import {
 } from "@/modules/host/host.repository.js";
 import { listPayouts } from "@/modules/admin/admin.repository.js";
 import { getHostRateRules, saveHostRateRules } from "@/modules/settings/settings.repository.js";
+import { apiError } from "@/core/errors.js";
+import { addDaysIso, today as todayIso } from "@/modules/host/smartPricingDates.js";
+import { query, queryOne } from "@/db/query.js";
+import { computeNightPrice } from "@/domain/smartPricingEngine.js";
+import { normalizeSmartRules } from "@/domain/smartPricingRules.js";
 
 export const hostRouter = Router();
 
@@ -128,6 +133,124 @@ hostRouter.put(
       req,
     );
     return ok(res, await saveHostRateRules(currentUser(req).userId, rules));
+  }),
+);
+
+// --- smart pricing ----------------------------------------------------------
+
+const seasonalSchema = z.object({
+  id: z.string().min(1).max(60),
+  label: z.string().max(80),
+  startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  percent: z.number().min(-90).max(300),
+  enabled: z.boolean(),
+});
+
+const smartRulesSchema = z.object({
+  weekend: z.object({ enabled: z.boolean(), percent: z.number().min(-90).max(300) }),
+  seasonal: z.array(seasonalSchema).max(50),
+  leadTime: z.object({
+    earlyBird: z.object({ enabled: z.boolean(), days: z.number().int().min(1).max(730), percent: z.number().min(0).max(90) }),
+    lastMinute: z.object({ enabled: z.boolean(), days: z.number().int().min(0).max(60), percent: z.number().min(0).max(90) }),
+  }),
+  occupancy: z.object({
+    enabled: z.boolean(),
+    windowDays: z.number().int().min(1).max(365),
+    highThreshold: z.number().min(0).max(100),
+    highPercent: z.number().min(-90).max(300),
+    lowThreshold: z.number().min(0).max(100),
+    lowPercent: z.number().min(-90).max(300),
+  }),
+  gapNight: z.object({
+    enabled: z.boolean(),
+    maxGapNights: z.number().int().min(1).max(7),
+    percent: z.number().min(0).max(90),
+    allowShorterMinStay: z.boolean(),
+  }),
+  floorUsd: z.number().min(0).nullable(),
+  ceilingUsd: z.number().min(0).nullable(),
+});
+
+async function ownedListing(req: Parameters<typeof currentUser>[0], propertyId: string) {
+  const user = currentUser(req);
+  const row = await queryOne<{ host_id: string | null; nightly_usd: string; smart_pricing_rules: unknown }>(
+    `SELECT p.host_id, l.nightly_usd, l.smart_pricing_rules
+       FROM property p JOIN listing l ON l.property_id = p.id WHERE p.id = $1`,
+    [propertyId],
+  );
+  if (!row) throw apiError("NOT_FOUND", { message: "That listing does not exist." });
+  if (row.host_id !== user.userId && !user.roles.includes("admin")) {
+    throw apiError("FORBIDDEN", { message: "This listing belongs to another host." });
+  }
+  return row;
+}
+
+hostRouter.get(
+  "/listings/:propertyId/smart-pricing",
+  asyncHandler(async (req, res) => {
+    const { propertyId } = validateParams(z.object({ propertyId: z.string().min(1) }), req);
+    const row = await ownedListing(req, propertyId);
+    return ok(res, { rules: normalizeSmartRules(row.smart_pricing_rules), basePrice: Number(row.nightly_usd) });
+  }),
+);
+
+hostRouter.put(
+  "/listings/:propertyId/smart-pricing",
+  asyncHandler(async (req, res) => {
+    const { propertyId } = validateParams(z.object({ propertyId: z.string().min(1) }), req);
+    await ownedListing(req, propertyId);
+    const rules = validateBody(smartRulesSchema, req);
+    if (rules.floorUsd !== null && rules.ceilingUsd !== null && rules.floorUsd > rules.ceilingUsd) {
+      throw apiError("VALIDATION_FAILED", { message: "The minimum price cannot be above the maximum price." });
+    }
+    await query("UPDATE listing SET smart_pricing_rules = $2::jsonb WHERE property_id = $1", [
+      propertyId,
+      JSON.stringify(rules),
+    ]);
+    return ok(res, { rules: normalizeSmartRules(rules) });
+  }),
+);
+
+/** Preview of the next N nights with a given (unsaved) rule set. */
+hostRouter.post(
+  "/listings/:propertyId/smart-pricing/preview",
+  asyncHandler(async (req, res) => {
+    const { propertyId } = validateParams(z.object({ propertyId: z.string().min(1) }), req);
+    const row = await ownedListing(req, propertyId);
+    const body = validateBody(z.object({ rules: smartRulesSchema, days: z.number().int().min(1).max(120).default(60) }), req);
+    const rules = normalizeSmartRules(body.rules);
+    const start = todayIso();
+    const end = addDaysIso(start, body.days);
+    const overrides = await query<{ night: string; price_usd: string | null }>(
+      `SELECT night::text AS night, price_usd FROM calendar_night
+        WHERE property_id = $1 AND night >= $2::date AND night < $3::date AND price_usd IS NOT NULL`,
+      [propertyId, start, end],
+    );
+    const overrideMap = new Map(overrides.map((o) => [o.night, Number(o.price_usd)]));
+    let occupancyPercent: number | null = null;
+    if (rules.occupancy.enabled) {
+      const window = rules.occupancy.windowDays;
+      const occ = await queryOne<{ taken: string }>(
+        `SELECT count(DISTINCT d)::text AS taken
+           FROM booking b, generate_series(CURRENT_DATE, CURRENT_DATE + ($2::int - 1), interval '1 day') d
+          WHERE b.property_id = $1 AND b.status IN ('pending','confirmed') AND d >= b.check_in AND d < b.check_out`,
+        [propertyId, window],
+      );
+      occupancyPercent = Math.round((Number(occ?.taken ?? 0) / window) * 100);
+    }
+    const nights = Array.from({ length: body.days }, (_, i) => {
+      const date = addDaysIso(start, i);
+      return computeNightPrice(rules, {
+        date,
+        basePrice: Number(row.nightly_usd),
+        overridePrice: overrideMap.get(date) ?? null,
+        daysAhead: i,
+        occupancyPercent,
+        isGapNight: false,
+      });
+    });
+    return ok(res, { occupancyPercent, nights });
   }),
 );
 

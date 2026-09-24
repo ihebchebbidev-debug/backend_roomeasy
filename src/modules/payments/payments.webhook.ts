@@ -1,3 +1,4 @@
+import { notifyBookingEvent } from "@/modules/notifications/bookingEmails.js";
 import type { Request, Response } from "express";
 import type Stripe from "stripe";
 
@@ -81,14 +82,16 @@ async function handleEvent(event: Stripe.Event): Promise<void> {
         // Paying never overrides the host's decision: only an instant-book
         // stay confirms itself. A request stays `pending` until the host
         // accepts it.
-        await query(
+        const confirmedNow = await query<{ id: string }>(
           `UPDATE booking b SET status = 'confirmed', updated_at = now()
              FROM property p
             WHERE b.id = $1 AND b.status = 'pending'
-              AND p.id = b.property_id AND p.instant_book`,
+              AND p.id = b.property_id AND p.instant_book
+            RETURNING b.id`,
           [bookingId],
           { label: "webhook.booking-confirm" },
         );
+        if (confirmedNow.length) void notifyBookingEvent(bookingId, "confirmed");
 
       } else {
         await confirmBookingPaid(intent.id);
@@ -114,6 +117,7 @@ async function handleEvent(event: Stripe.Event): Promise<void> {
           chargeId: typeof intent.latest_charge === "string" ? intent.latest_charge : null,
           hostSettled: Boolean(intent.transfer_data?.destination),
         });
+        void notifyBookingEvent(bookingId, "created");
       }
       logger.info({ intent: intent.id, bookingId }, "payment authorised (held)");
       break;

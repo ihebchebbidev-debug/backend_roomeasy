@@ -8,10 +8,12 @@ import { logger } from "@/core/logger.js";
 import { query, queryOne, transaction } from "@/db/query.js";
 import { refundFor, type CancellationPolicy } from "@/domain/cancellation.js";
 import { authorizeCard, type CardInput } from "@/domain/cards.js";
-import { computeQuote, type PriceBreakdown } from "@/domain/pricing.js";
+import { computeQuote, smartRulesActive, type PriceBreakdown } from "@/domain/pricing.js";
+import { normalizeSmartRules } from "@/domain/smartPricingRules.js";
 import { calendarMap } from "@/modules/listings/calendar.repository.js";
 import { capturePaymentForBooking, refundThroughStripe } from "@/modules/payments/refunds.js";
 
+import { notifyBookingEvent } from "@/modules/notifications/bookingEmails.js";
 import { getHostRateRules, getPlatformSettings } from "@/modules/settings/settings.repository.js";
 
 export type BookingStatus = "pending" | "confirmed" | "declined" | "cancelled" | "completed";
@@ -244,6 +246,7 @@ type StayRow = {
   long_stay_discount: string;
   mobile_enabled: boolean;
   mobile_discount: string;
+  smart_pricing_rules: unknown;
 };
 
 /** The live pricing + policy record a quote or booking is built from. */
@@ -253,7 +256,7 @@ export async function loadStay(propertyId: string, client?: PoolClient): Promise
             p.cancellation_policy, p.instant_book,
             l.nightly_usd, l.status::text AS status, l.approved,
             l.long_stay_enabled, l.long_stay_threshold, l.long_stay_discount,
-            l.mobile_enabled, l.mobile_discount
+            l.mobile_enabled, l.mobile_discount, l.smart_pricing_rules
        FROM property p
        LEFT JOIN listing l ON l.property_id = p.id
       WHERE p.id = $1`,
@@ -365,6 +368,45 @@ export async function checkAvailability(input: {
   };
 }
 
+/** Occupancy of the upcoming window and the nights of this stay that fill a short gap. */
+async function smartContext(
+  propertyId: string,
+  from: string,
+  to: string,
+  rules: ReturnType<typeof normalizeSmartRules>,
+) {
+  let occupancyPercent: number | null = null;
+  if (rules.occupancy.enabled) {
+    const window = Math.max(1, rules.occupancy.windowDays);
+    const row = await queryOne<{ taken: string }>(
+      `SELECT count(DISTINCT d)::text AS taken
+         FROM booking b, generate_series(CURRENT_DATE, CURRENT_DATE + ($2::int - 1), interval '1 day') d
+        WHERE b.property_id = $1 AND b.status IN ('pending','confirmed')
+          AND d >= b.check_in AND d < b.check_out`,
+      [propertyId, window],
+      { label: "bookings.smartOccupancy" },
+    );
+    occupancyPercent = Math.round((Number(row?.taken ?? 0) / window) * 100);
+  }
+
+  const gapNights = new Set<string>();
+  if (rules.gapNight.enabled) {
+    // The stay fills a gap when a booking ends exactly at check-in and another
+    // starts exactly at check-out, and the stay is short enough.
+    const nights = stayNights(from, to);
+    if (nights.length <= rules.gapNight.maxGapNights) {
+      const row = await queryOne<{ before: boolean; after: boolean }>(
+        `SELECT EXISTS (SELECT 1 FROM booking WHERE property_id = $1 AND status IN ('pending','confirmed') AND check_out = $2::date) AS before,
+                EXISTS (SELECT 1 FROM booking WHERE property_id = $1 AND status IN ('pending','confirmed') AND check_in = $3::date) AS after`,
+        [propertyId, from, to],
+        { label: "bookings.smartGap" },
+      );
+      if (row?.before && row?.after) nights.forEach((night) => gapNights.add(night));
+    }
+  }
+  return { rules, occupancyPercent, gapNights };
+}
+
 /** Server-side price for a set of nights. The client never sends a total. */
 export async function quoteStay(input: {
   propertyId: string;
@@ -400,7 +442,13 @@ export async function quoteStay(input: {
     calendarMap(input.propertyId, input.from, input.to),
   ]);
 
+  const smartRules = normalizeSmartRules(stay.smart_pricing_rules);
+  const smart = smartRulesActive(smartRules)
+    ? await smartContext(input.propertyId, input.from, input.to, smartRules)
+    : null;
+
   const quote = computeQuote({
+    smart,
     from: input.from,
     to: input.to,
     nightlyUsd: Number(stay.nightly_usd),
@@ -540,7 +588,10 @@ export async function createBooking(input: {
     return created!;
   }, "bookings.create");
 
-  return mapBooking(row);
+  const created = mapBooking(row);
+  // Stripe bookings are announced once the payment webhook reports the money.
+  if (input.card) void notifyBookingEvent(created.id, created.status === "confirmed" ? "confirmed" : "created");
+  return created;
 }
 
 // ---------------------------------------------------------------------------
@@ -592,7 +643,18 @@ export async function listHostBookings(
   hostId: string,
   options: { status?: BookingStatus[]; propertyId?: string; limit?: number; offset?: number } = {},
 ): Promise<BookingDto[]> {
-  const clauses = ["p.host_id = $1"];
+  // Release nights held by checkouts that were abandoned before payment, so an
+  // abandoned cart never shows up in the host's requests.
+  await sweepExpiredHolds();
+
+  const clauses = [
+    "p.host_id = $1",
+    // A pending request is only real once the guest has actually paid (or the
+    // card was authorised); an unpaid pending row is a checkout in progress.
+    `(b.status <> 'pending' OR EXISTS (
+        SELECT 1 FROM payment pay
+         WHERE pay.booking_id = b.id AND pay.status IN ('authorized', 'paid')))`,
+  ];
   const values: unknown[] = [hostId];
 
   if (options.status?.length) {
@@ -833,6 +895,7 @@ export async function decideBooking(input: {
     throw error;
   }
 
+  void notifyBookingEvent(booking.id, input.decision);
   return mapBooking(row);
 }
 
@@ -919,6 +982,7 @@ export async function cancelBooking(input: {
     return updated!;
   }, "bookings.cancel");
 
+  if (input.actorRole !== "admin") void notifyBookingEvent(booking.id, `cancelled_by_${input.actorRole}`);
   return { ...mapBooking(row), refund: { percent: refund.percent, amountUsd: refund.amountUsd } };
 }
 

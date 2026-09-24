@@ -339,17 +339,19 @@ export async function submitIdentityDocument(input: {
   userId: string;
   documentKind: string;
   documentReference: string;
+  documentFiles?: string[];
 }): Promise<void> {
   await query(
-    `INSERT INTO identity_verification (user_id, status, document_kind, document_reference)
-     VALUES ($1, 'pending', $2, $3)
+    `INSERT INTO identity_verification (user_id, status, document_kind, document_reference, document_files)
+     VALUES ($1, 'pending', $2, $3, $4)
      ON CONFLICT (user_id) DO UPDATE
         SET document_kind = $2,
             document_reference = $3,
+            document_files = coalesce($4, identity_verification.document_files),
             status = CASE WHEN identity_verification.status = 'verified'
                           THEN identity_verification.status
                           ELSE 'pending'::verification_status END`,
-    [input.userId, input.documentKind, input.documentReference],
+    [input.userId, input.documentKind, input.documentReference, input.documentFiles?.length ? input.documentFiles : null],
     { label: "accounts.submitIdentityDocument" },
   );
 }

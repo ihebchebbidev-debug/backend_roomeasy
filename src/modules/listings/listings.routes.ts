@@ -57,6 +57,8 @@ const draftSchema = z.object({
     country: z.string().trim().min(2, "Enter the country.").max(80),
     postal: z.string().trim().max(16).default(""),
     neighbourhood: z.string().trim().max(120).default(""),
+    lat: z.number().min(-90).max(90).nullable().optional(),
+    lng: z.number().min(-180).max(180).nullable().optional(),
   }),
   capacity: z.object({
     guests: z.number().int().min(1).max(64),

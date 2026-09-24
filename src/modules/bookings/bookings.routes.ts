@@ -15,6 +15,8 @@ import {
   listHostBookings,
   quoteStay,
 } from "@/modules/bookings/bookings.repository.js";
+import { bookingInvoice } from "@/modules/admin/finance.repository.js";
+import { renderInvoicePdf } from "@/modules/admin/invoice.pdf.js";
 
 export const bookingsRouter = Router();
 
@@ -161,6 +163,18 @@ bookingsRouter.get(
       isAdmin: isAdmin(req),
     });
     return ok(res, booking);
+  }),
+);
+
+/** PDF invoice for one booking: available to its guest, its host and admins. */
+bookingsRouter.get(
+  "/:bookingId/invoice.pdf",
+  asyncHandler(async (req, res) => {
+    const { bookingId } = validateParams(bookingParams, req);
+    await assertBookingAccess(bookingId, { userId: currentUser(req).userId, isAdmin: isAdmin(req) });
+    const invoice = await bookingInvoice(bookingId);
+    if (!invoice) throw apiError("NOT_FOUND", { message: "That reservation does not exist." });
+    renderInvoicePdf(invoice, res);
   }),
 );
 

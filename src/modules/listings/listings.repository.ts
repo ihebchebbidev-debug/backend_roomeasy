@@ -16,7 +16,7 @@ export type ListingDraft = {
   category: string;
   summary: string;
   description: string;
-  location: { city: string; country: string; postal: string; neighbourhood: string };
+  location: { city: string; country: string; postal: string; neighbourhood: string; lat?: number | null; lng?: number | null };
   capacity: { guests: number; rooms: number; beds: number; baths: number; area: number };
   amenities: string[];
   equipment: string[];
@@ -173,10 +173,10 @@ export async function saveListing(input: {
       `INSERT INTO property (
          id, host_id, name, category, summary, description, city, country, neighbourhood, postal_code,
          guests, rooms, beds, baths, area_sqm, base_price_usd, cleaning_fee_usd, min_nights,
-         cancellation_policy, house_rules, check_in, check_out, instant_book)
+         cancellation_policy, house_rules, check_in, check_out, instant_book, latitude, longitude)
        VALUES ($1, $2, $3, $4::property_category, $5, $6, $7, $8, $9, $10,
                $11, $12, $13, $14, $15, $16, $17, $18,
-               $19::cancellation_policy, $20, $21::time, $22::time, $23)
+               $19::cancellation_policy, $20, $21::time, $22::time, $23, $24, $25)
        ON CONFLICT (id) DO UPDATE SET
          host_id = coalesce(property.host_id, excluded.host_id),
          name = excluded.name, category = excluded.category, summary = excluded.summary,
@@ -187,6 +187,7 @@ export async function saveListing(input: {
          cleaning_fee_usd = excluded.cleaning_fee_usd, min_nights = excluded.min_nights,
          cancellation_policy = excluded.cancellation_policy, house_rules = excluded.house_rules,
          check_in = excluded.check_in, check_out = excluded.check_out, instant_book = excluded.instant_book,
+         latitude = coalesce(excluded.latitude, property.latitude), longitude = coalesce(excluded.longitude, property.longitude),
          updated_at = now()`,
       [
         draft.propertyId,
@@ -212,6 +213,8 @@ export async function saveListing(input: {
         timeOrNull(draft.policies.checkIn),
         timeOrNull(draft.policies.checkOut),
         draft.policies.instantBook,
+        draft.location.lat ?? null,
+        draft.location.lng ?? null,
       ],
       { client, label: "listings.upsertProperty" },
     );

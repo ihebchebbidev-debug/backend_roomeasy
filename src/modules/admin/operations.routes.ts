@@ -4,6 +4,7 @@ import { z } from "zod";
 import { apiError } from "@/core/errors.js";
 import { asyncHandler, created, ok } from "@/core/http.js";
 import { validateBody, validateParams, validateQuery } from "@/core/validate.js";
+import { sendXlsx } from "@/core/xlsx.js";
 import { currentUser } from "@/middleware/auth.js";
 import { requireCapability } from "@/middleware/permissions.js";
 import { adminInsights, adminReports, setListingSuspended, setUserSuspended } from "@/modules/admin/admin.repository.js";
@@ -26,6 +27,7 @@ import {
   commissionReport,
   financeLedger,
 } from "@/modules/admin/finance.repository.js";
+import { renderInvoicePdf } from "@/modules/admin/invoice.pdf.js";
 import { dispatchQueuedEmails, requeueNotification } from "@/modules/notifications/dispatcher.js";
 import { mailerStatus, verifyMailer } from "@/modules/notifications/mailer.js";
 import { stripeStatus } from "@/modules/payments/stripe.client.js";
@@ -711,6 +713,75 @@ adminOperationsRouter.get(
   }),
 );
 
+/** The same statistics export as a native .xlsx workbook. */
+adminOperationsRouter.get(
+  "/stats/export.xlsx",
+  requireCapability("stats.read"),
+  asyncHandler(async (req, res) => {
+    const { months } = validateQuery(z.object({ months: z.coerce.number().int().min(1).max(36).default(12) }), req);
+    const [reports, insights] = await Promise.all([adminReports(months), adminInsights(months)]);
+
+    await sendXlsx(res, `roomeasy-statistics-${months}m.xlsx`, [
+      {
+        name: "Monthly",
+        columns: [
+          { header: "Month", key: "month", width: 14, value: (r: (typeof reports.monthly)[number]) => r.month },
+          { header: "Bookings", key: "bookings", width: 12, numFmt: "#,##0", value: (r: (typeof reports.monthly)[number]) => r.bookings },
+          { header: "Revenue (USD)", key: "revenue", width: 16, numFmt: "#,##0.00", value: (r: (typeof reports.monthly)[number]) => r.revenueUsd },
+          { header: "Commission (USD)", key: "commission", width: 18, numFmt: "#,##0.00", value: (r: (typeof reports.monthly)[number]) => r.commissionUsd },
+        ],
+        rows: reports.monthly,
+      } as never,
+      {
+        name: "Top listings",
+        columns: [
+          { header: "Listing", key: "name", width: 32, value: (r: (typeof reports.topListings)[number]) => r.name },
+          { header: "Bookings", key: "bookings", width: 12, numFmt: "#,##0", value: (r: (typeof reports.topListings)[number]) => r.bookings },
+          { header: "Revenue (USD)", key: "revenue", width: 16, numFmt: "#,##0.00", value: (r: (typeof reports.topListings)[number]) => r.revenueUsd },
+        ],
+        rows: reports.topListings,
+      } as never,
+      {
+        name: "Top hosts",
+        columns: [
+          { header: "Host", key: "hostName", width: 28, value: (r: (typeof reports.topHosts)[number]) => r.hostName },
+          { header: "Listings", key: "listings", width: 12, numFmt: "#,##0", value: (r: (typeof reports.topHosts)[number]) => r.listings },
+          { header: "Revenue (USD)", key: "revenue", width: 16, numFmt: "#,##0.00", value: (r: (typeof reports.topHosts)[number]) => r.revenueUsd },
+        ],
+        rows: reports.topHosts,
+      } as never,
+      {
+        name: "Cancellations",
+        columns: [
+          { header: "Reason", key: "reason", width: 24, value: (r: (typeof reports.cancellations)[number]) => r.reason },
+          { header: "Count", key: "count", width: 12, numFmt: "#,##0", value: (r: (typeof reports.cancellations)[number]) => r.count },
+          { header: "Refunded (USD)", key: "refunded", width: 16, numFmt: "#,##0.00", value: (r: (typeof reports.cancellations)[number]) => r.refundedUsd },
+        ],
+        rows: reports.cancellations,
+      } as never,
+      {
+        name: "Occupancy & signups",
+        columns: [
+          { header: "Month", key: "month", width: 14, value: (r: (typeof insights.monthlyOccupancy)[number]) => r.month },
+          { header: "Nights booked", key: "nights", width: 16, numFmt: "#,##0", value: (r: (typeof insights.monthlyOccupancy)[number]) => r.nightsBooked },
+          { header: "Occupancy rate (%)", key: "rate", width: 18, numFmt: "0.00", value: (r: (typeof insights.monthlyOccupancy)[number]) => r.rate },
+        ],
+        rows: insights.monthlyOccupancy,
+      } as never,
+      {
+        name: "Top destinations",
+        columns: [
+          { header: "Destination", key: "destination", width: 28, value: (r: (typeof insights.topDestinations)[number]) => `${r.city}, ${r.country}` },
+          { header: "Bookings", key: "bookings", width: 12, numFmt: "#,##0", value: (r: (typeof insights.topDestinations)[number]) => r.bookings },
+          { header: "Revenue (USD)", key: "revenue", width: 16, numFmt: "#,##0.00", value: (r: (typeof insights.topDestinations)[number]) => r.revenueUsd },
+          { header: "Nights", key: "nights", width: 12, numFmt: "#,##0", value: (r: (typeof insights.topDestinations)[number]) => r.nights },
+        ],
+        rows: insights.topDestinations,
+      } as never,
+    ]);
+  }),
+);
+
 // --- finance: ledger, commission report, accounting export, invoices ---------
 
 const dateRange = z.object({
@@ -790,6 +861,38 @@ adminOperationsRouter.get(
   }),
 );
 
+/** The same accounting totals as a native .xlsx workbook. */
+adminOperationsRouter.get(
+  "/finance/accounting.xlsx",
+  requireCapability("finance.read"),
+  asyncHandler(async (req, res) => {
+    const input = validateQuery(
+      dateRange.extend({ period: z.enum(["month", "quarter", "year"]).default("month") }),
+      req,
+    );
+    const rows = await accountingExport(input);
+    type AccRow = (typeof rows)[number];
+    await sendXlsx(res, `roomeasy-accounting-${input.period}.xlsx`, [
+      {
+        name: "Accounting",
+        columns: [
+          { header: "Period", key: "period", width: 14, value: (r: AccRow) => r.period },
+          { header: "Bookings", key: "bookings", width: 12, numFmt: "#,##0", value: (r: AccRow) => r.bookings },
+          { header: "Revenue (USD)", key: "revenue", width: 16, numFmt: "#,##0.00", value: (r: AccRow) => r.revenueUsd },
+          { header: "Commission (USD)", key: "commission", width: 18, numFmt: "#,##0.00", value: (r: AccRow) => r.commissionUsd },
+          { header: "Host net (USD)", key: "hostNet", width: 16, numFmt: "#,##0.00", value: (r: AccRow) => r.hostNetUsd },
+          { header: "Service fee (USD)", key: "serviceFee", width: 18, numFmt: "#,##0.00", value: (r: AccRow) => r.serviceFeeUsd },
+          { header: "Taxes (USD)", key: "taxes", width: 14, numFmt: "#,##0.00", value: (r: AccRow) => r.taxesUsd },
+          { header: "Cleaning (USD)", key: "cleaning", width: 16, numFmt: "#,##0.00", value: (r: AccRow) => r.cleaningUsd },
+          { header: "Refunded (USD)", key: "refunded", width: 16, numFmt: "#,##0.00", value: (r: AccRow) => r.refundedUsd },
+          { header: "Paid (USD)", key: "paid", width: 14, numFmt: "#,##0.00", value: (r: AccRow) => r.paidUsd },
+        ],
+        rows,
+      } as never,
+    ]);
+  }),
+);
+
 /** Everything needed to print the invoice of one booking. */
 adminOperationsRouter.get(
   "/finance/invoice/:bookingId",
@@ -799,6 +902,18 @@ adminOperationsRouter.get(
     const invoice = await bookingInvoice(bookingId);
     if (!invoice) throw apiError("NOT_FOUND", { message: "That reservation does not exist." });
     return ok(res, invoice);
+  }),
+);
+
+/** The same invoice, rendered as a downloadable PDF. */
+adminOperationsRouter.get(
+  "/finance/invoice/:bookingId/pdf",
+  requireCapability("finance.read"),
+  asyncHandler(async (req, res) => {
+    const { bookingId } = validateParams(z.object({ bookingId: z.string().trim().min(3).max(140) }), req);
+    const invoice = await bookingInvoice(bookingId);
+    if (!invoice) throw apiError("NOT_FOUND", { message: "That reservation does not exist." });
+    renderInvoicePdf(invoice, res);
   }),
 );
 

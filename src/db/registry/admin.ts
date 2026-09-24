@@ -123,6 +123,7 @@ export const adminTables: TableDef[] = [
       { name: "status", type: "verification_status", notNull: true, default: "'pending'" },
       { name: "document_kind", type: "text" },
       { name: "document_reference", type: "text" },
+      { name: "document_files", type: "text[]" },
       { name: "notes", type: "text" },
       { name: "decided_by", type: "uuid", references: "app_user(id) ON DELETE SET NULL" },
       { name: "decided_at", type: "timestamptz" },

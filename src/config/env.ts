@@ -37,6 +37,8 @@ const envSchema = z.object({
   // --- Branding used in emails and Stripe metadata -------------------------
   APP_NAME: z.string().default("RoomEasy"),
   APP_PUBLIC_URL: z.string().default("http://localhost:8080"),
+  // Used to build links inside transactional emails (booking pages, etc.).
+  PUBLIC_APP_URL: z.string().optional(),
 
   // --- SMTP (OVH by default) -----------------------------------------------
   SMTP_HOST: z.string().default(""),

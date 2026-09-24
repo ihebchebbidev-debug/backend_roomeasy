@@ -216,6 +216,7 @@ accountsRouter.post(
           .trim()
           .min(4, "Enter the number shown on your identity document.")
           .max(80),
+        documentFiles: z.array(z.string()).optional(),
       }),
       req,
     );
@@ -225,6 +226,7 @@ accountsRouter.post(
       userId,
       documentKind: body.documentKind,
       documentReference: body.documentReference,
+      documentFiles: body.documentFiles,
     });
     req.log.info({ userId, documentKind: body.documentKind }, "host identity document filed");
     return ok(res, account);

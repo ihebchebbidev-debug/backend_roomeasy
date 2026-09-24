@@ -1,3 +1,4 @@
+import { notifyNewMessage } from "@/modules/notifications/bookingEmails.js";
 import { apiError } from "@/core/errors.js";
 import { threadId as buildThreadId } from "@/core/ids.js";
 import { query, queryOne, transaction } from "@/db/query.js";
@@ -293,7 +294,7 @@ export async function sendMessage(input: {
   const senderRole =
     thread.host_id === input.senderId ? "host" : thread.guest_id === input.senderId ? "guest" : "admin";
 
-  return transaction(async (client) => {
+  const message = await transaction(async (client) => {
     const row = await queryOne<MessageRow>(
       `INSERT INTO message (thread_id, sender_id, sender_role, body)
        VALUES ($1, $2, $3::actor_role, $4)
@@ -308,6 +309,14 @@ export async function sendMessage(input: {
 
     return mapMessage(row!, input.senderId);
   }, "messaging.sendMessage");
+
+  const recipientId = senderRole === "host" ? thread.guest_id : senderRole === "guest" ? thread.host_id : null;
+  const senderName = (senderRole === "host" ? thread.host_name : thread.guest_name) ?? "RoomEasy";
+  const stay = thread.property_id
+    ? await queryOne<{ name: string }>("SELECT name FROM property WHERE id = $1", [thread.property_id])
+    : null;
+  void notifyNewMessage({ recipientId, senderName, stayName: stay?.name ?? "RoomEasy", body, threadId: input.threadId });
+  return message;
 }
 
 /** Starts (or reuses) a conversation and posts the first message in one call. */
