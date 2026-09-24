@@ -43,4 +43,24 @@ export const functions: string[] = [
      RETURN NULL;
    END;
    $$;`,
+
+  `CREATE OR REPLACE FUNCTION protect_audit_log() RETURNS trigger
+   LANGUAGE plpgsql AS $$
+   BEGIN
+     -- Maintenance scripts (demo reseed) may purge their own rows explicitly.
+     IF current_setting('app.audit_maintenance', true) = 'on' THEN
+       RETURN coalesce(NEW, OLD);
+     END IF;
+     -- Deleting an admin account nulls admin_id (ON DELETE SET NULL): allowed,
+     -- as long as nothing else in the row changes.
+     IF TG_OP = 'UPDATE'
+        AND NEW.admin_id IS NULL
+        AND (NEW.id, NEW.action, NEW.target_kind, NEW.target_id, NEW.reason, NEW.metadata, NEW.created_at)
+            IS NOT DISTINCT FROM
+            (OLD.id, OLD.action, OLD.target_kind, OLD.target_id, OLD.reason, OLD.metadata, OLD.created_at) THEN
+       RETURN NEW;
+     END IF;
+     RAISE EXCEPTION 'The audit log is append-only' USING ERRCODE = '42501';
+   END;
+   $$;`,
 ];

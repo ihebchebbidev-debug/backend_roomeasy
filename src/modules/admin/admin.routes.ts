@@ -27,6 +27,7 @@ import {
 } from "@/modules/admin/rejectionReasons.js";
 import { listModerationLog, recordModeration } from "@/modules/admin/moderation.repository.js";
 import { adminOperationsRouter } from "@/modules/admin/operations.routes.js";
+import { adminCatalogRouter } from "@/modules/admin/catalog.routes.js";
 import { grantRole, revokeRole } from "@/modules/accounts/accounts.repository.js";
 import { listAllBookings } from "@/modules/bookings/bookings.repository.js";
 import { bookingConversation } from "@/modules/messaging/messaging.repository.js";
@@ -39,6 +40,9 @@ adminRouter.use(requireRole(...ADMIN_ROLES));
 
 /** Reports, verification, bans, commission, refunds, tickets, notifications. */
 adminRouter.use(adminOperationsRouter);
+
+/** Amenities, cities, content pages, translations, 2FA reset, Stripe identity sync. */
+adminRouter.use(adminCatalogRouter);
 
 /** The signed-in administrator: roles held and what they are allowed to do. */
 adminRouter.get(

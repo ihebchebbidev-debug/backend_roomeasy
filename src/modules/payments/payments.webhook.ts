@@ -12,6 +12,7 @@ import {
   markPaymentRefunded,
   recordStripePayment,
   setHostStripeAccount,
+  recordStripeIdentity,
 } from "@/modules/payments/payments.repository.js";
 import { fromMinorUnits, requireStripe, stripeEnabled } from "@/modules/payments/stripe.client.js";
 
@@ -155,6 +156,23 @@ async function handleEvent(event: Stripe.Event): Promise<void> {
           chargesEnabled: Boolean(account.charges_enabled),
           payoutsEnabled: Boolean(account.payouts_enabled),
           detailsSubmitted: Boolean(account.details_submitted),
+        });
+        const individual = (account as unknown as { individual?: { verification?: { status?: string } } }).individual;
+        const due = [...(account.requirements?.currently_due ?? []), ...(account.requirements?.past_due ?? [])];
+        const reported = individual?.verification?.status;
+        await recordStripeIdentity({
+          hostId,
+          accountId: account.id,
+          status: reported === "verified" && due.length === 0
+            ? "verified"
+            : reported === "pending"
+              ? "pending"
+              : due.length
+                ? "requirements_due"
+                : account.details_submitted
+                  ? "pending"
+                  : "unverified",
+          requirements: due,
         });
         // Only on the false -> true transition: Stripe re-sends
         // `account.updated` for any account change and retries deliveries.

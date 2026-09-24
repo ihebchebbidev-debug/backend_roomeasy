@@ -28,6 +28,7 @@ export const CAPABILITIES = [
   "settings.manage",
   "admins.manage",
   "audit.read",
+  "content.manage",
 ] as const;
 export type Capability = (typeof CAPABILITIES)[number];
 
@@ -35,7 +36,7 @@ const ROLE_CAPABILITIES: Record<AdminRole, readonly Capability[]> = {
   // Super admin — everything.
   admin: CAPABILITIES,
   // Listing moderator — content only, never finance.
-  moderator: ["listings.read", "listings.moderate", "reviews.moderate", "users.read", "bookings.read", "stats.read", "audit.read"],
+  moderator: ["listings.read", "listings.moderate", "reviews.moderate", "users.read", "bookings.read", "stats.read", "audit.read", "content.manage"],
   // Customer support — tickets, disputes, read-only on the bookings concerned.
   support: ["support.manage", "bookings.read", "users.read", "listings.read", "stats.read", "audit.read"],
   // Accounting — the finance module, read-only elsewhere.

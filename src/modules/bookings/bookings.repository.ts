@@ -496,6 +496,15 @@ export async function createBooking(input: {
   if (stay.host_id && input.guestId && stay.host_id === input.guestId) {
     throw apiError("OWN_PROPERTY_BOOKING");
   }
+  // A banned or suspended member cannot book, even with a token issued before the ban.
+  if (input.guestId) {
+    const guestRows = await query<{ suspended: boolean }>(
+      "SELECT suspended FROM app_user WHERE id = $1",
+      [input.guestId],
+      { label: "bookings.guestSuspended" },
+    );
+    if (guestRows[0]?.suspended) throw apiError("ACCOUNT_SUSPENDED");
+  }
   if (input.from < today()) {
     throw apiError("DATES_IN_PAST", { details: { from: input.from, today: today() } });
   }

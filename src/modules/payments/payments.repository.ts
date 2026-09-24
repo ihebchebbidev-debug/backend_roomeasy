@@ -261,6 +261,30 @@ export async function setHostStripeAccount(input: {
 }
 
 
+/**
+ * Stores the identity state Stripe reports for a host's connected account.
+ * The platform never collects documents: this is the only source the admin
+ * uses to approve or reject the host.
+ */
+export async function recordStripeIdentity(input: {
+  hostId: string;
+  accountId: string;
+  status: "unverified" | "pending" | "verified" | "requirements_due";
+  requirements: string[];
+}): Promise<void> {
+  await query(
+    `INSERT INTO identity_verification (user_id, status, stripe_account_id, stripe_status, stripe_requirements, stripe_checked_at)
+     VALUES ($1, 'pending', $2, $3, $4, now())
+     ON CONFLICT (user_id) DO UPDATE
+        SET stripe_account_id = EXCLUDED.stripe_account_id,
+            stripe_status = EXCLUDED.stripe_status,
+            stripe_requirements = EXCLUDED.stripe_requirements,
+            stripe_checked_at = now()`,
+    [input.hostId, input.accountId, input.status, input.requirements],
+    { label: "payments.stripe-identity" },
+  );
+}
+
 export async function hostStripeAccount(hostId: string): Promise<{
   accountId: string | null;
   chargesEnabled: boolean;

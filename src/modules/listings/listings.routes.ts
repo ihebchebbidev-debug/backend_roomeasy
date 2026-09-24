@@ -1,3 +1,4 @@
+import { isActivePropertyType } from "@/modules/admin/taxonomy.repository.js";
 import { Router } from "express";
 import { z } from "zod";
 
@@ -29,27 +30,15 @@ export const listingsRouter = Router();
 /** Every route here belongs to a host (or an admin acting on their behalf). */
 listingsRouter.use(requireRole("host", "admin"));
 
-const propertyTypes = [
-  "apartment",
-  "resort",
-  "lodge",
-  "hotel",
-  "villa",
-  "guesthouse",
-  "riad",
-  "studio",
-  "bungalow",
-  "chalet",
-  "hostel",
-  "camping",
-] as const;
+/** Property types are managed by admins (table property_type); checked against the database on save. */
+const propertyTypeId = z.string().trim().regex(/^[a-z0-9_-]{2,40}$/, "Choose a property type.");
 
 /** Mirrors `listingDraftSchema` in the app so both sides reject the same payload. */
 const draftSchema = z.object({
   propertyId: z.string().trim().max(120).default(""),
   listingId: z.string().trim().max(140).default(""),
   title: z.string().trim().min(4, "The title needs at least 4 characters.").max(120),
-  category: z.enum(propertyTypes),
+  category: propertyTypeId,
   summary: z.string().trim().max(300).default(""),
   description: z.string().trim().max(4000).default(""),
   location: z.object({
@@ -112,6 +101,9 @@ listingsRouter.put(
   "/",
   asyncHandler(async (req, res) => {
     const draft = validateBody(draftSchema, req) as ListingDraft;
+    if (!(await isActivePropertyType(draft.category))) {
+      throw apiError("VALIDATION_FAILED", { message: "This property type is not available.", details: { field: "category" } });
+    }
     const user = currentUser(req);
     await ensureHostProfile(user.userId);
 

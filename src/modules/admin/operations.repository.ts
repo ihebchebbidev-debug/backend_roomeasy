@@ -79,7 +79,7 @@ export async function adminCancelBooking(input: {
 
   // Send the money back through Stripe first: if it fails, nothing in our own
   // tables claims the guest was refunded.
-  await refundThroughStripe(booking.id, refundUsd);
+  const stripeRefundId = await refundThroughStripe(booking.id, refundUsd);
 
 
 
@@ -100,8 +100,8 @@ export async function adminCancelBooking(input: {
 
   if (refundUsd > 0) {
     await query(
-      `INSERT INTO booking_refund (booking_id, amount_usd, reason, issued_by) VALUES ($1, $2, $3, $4)`,
-      [booking.id, refundUsd, input.reason, input.adminId],
+      `INSERT INTO booking_refund (booking_id, amount_usd, reason, issued_by, stripe_refund_id) VALUES ($1, $2, $3, $4, $5)`,
+      [booking.id, refundUsd, input.reason, input.adminId, stripeRefundId],
       { label: "adminOps.cancelRefund" },
     );
     await query("UPDATE payment SET refunded_usd = refunded_usd + $2, status = 'refunded' WHERE booking_id = $1", [
@@ -129,11 +129,11 @@ export async function refundBooking(input: {
   }
 
   // Real money moves first; the audit row is only written once Stripe agrees.
-  await refundThroughStripe(booking.id, input.amountUsd);
+  const stripeRefundId = await refundThroughStripe(booking.id, input.amountUsd);
 
   await query(
-    "INSERT INTO booking_refund (booking_id, amount_usd, reason, issued_by) VALUES ($1, $2, $3, $4)",
-    [booking.id, input.amountUsd, input.reason, input.adminId],
+    "INSERT INTO booking_refund (booking_id, amount_usd, reason, issued_by, stripe_refund_id) VALUES ($1, $2, $3, $4, $5)",
+    [booking.id, input.amountUsd, input.reason, input.adminId, stripeRefundId],
     { label: "adminOps.refund" },
   );
   await query(
@@ -172,8 +172,8 @@ export async function adjustBooking(input: {
 }
 
 export async function listBookingRefunds(bookingId: string) {
-  const rows = await query<{ id: string; amount_usd: string; reason: string; created_at: Date; admin_name: string | null }>(
-    `SELECT r.id, r.amount_usd, r.reason, r.created_at, u.full_name AS admin_name
+  const rows = await query<{ id: string; amount_usd: string; reason: string; created_at: Date; admin_name: string | null; stripe_refund_id: string | null }>(
+    `SELECT r.id, r.amount_usd, r.reason, r.created_at, u.full_name AS admin_name, r.stripe_refund_id
        FROM booking_refund r
        LEFT JOIN app_user u ON u.id = r.issued_by
       WHERE r.booking_id = $1
@@ -186,6 +186,7 @@ export async function listBookingRefunds(bookingId: string) {
     amountUsd: Number(row.amount_usd),
     reason: row.reason,
     adminName: row.admin_name,
+    stripeRefundId: row.stripe_refund_id,
     createdAt: row.created_at.toISOString(),
   }));
 }

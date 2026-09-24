@@ -26,7 +26,12 @@ export type ModerationAction =
   | "ticket_assigned"
   | "ticket_status_changed"
   | "ticket_action_taken"
-  | "commission_updated";
+  | "commission_updated"
+  | "taxonomy_updated"
+  | "content_updated"
+  | "translation_updated"
+  | "two_factor_reset"
+  | "identity_synced";
 
 /** Append-only audit trail for every privileged action. */
 export async function recordModeration(entry: {

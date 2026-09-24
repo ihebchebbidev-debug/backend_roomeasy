@@ -31,6 +31,8 @@ export const errorCatalogue = {
   ACCOUNT_SUSPENDED: { status: 403, message: "This account has been suspended by an administrator." },
   EMAIL_TAKEN: { status: 409, message: "An account already uses this email address." },
   PASSWORD_TOO_WEAK: { status: 422, message: "Use at least 8 characters for the password." },
+  TWO_FACTOR_REQUIRED: { status: 401, message: "Enter the 6-digit code from your authenticator app." },
+  TWO_FACTOR_INVALID: { status: 401, message: "That code is not valid. Try the current code from your app." },
   RESET_TOKEN_INVALID: { status: 400, message: "This password reset link is invalid or has expired." },
 
   // --- listings & properties -------------------------------------------------

@@ -73,6 +73,13 @@ const finalisers: string[] = [
          FOR EACH ROW EXECUTE FUNCTION enforce_photo_limit();
      END IF;
    END $$;`,
+  `DO $$
+   BEGIN
+     IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'moderation_log_append_only') THEN
+       CREATE TRIGGER moderation_log_append_only BEFORE UPDATE OR DELETE ON moderation_log
+         FOR EACH ROW EXECUTE FUNCTION protect_audit_log();
+     END IF;
+   END $$;`,
   `INSERT INTO platform_settings (id) VALUES (true) ON CONFLICT (id) DO NOTHING;`,
   `INSERT INTO trust_badge_rule (code, min_reservations, window_months, notes)
      VALUES ('genuse', 5, 24, 'Provisional rule: 5 completed reservations within 24 months.')

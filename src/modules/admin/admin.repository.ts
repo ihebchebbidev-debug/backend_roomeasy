@@ -487,6 +487,9 @@ export type AdminHostProfile = {
     commissionRate: number | null;
     defaultCommissionRate: number;
     verificationStatus: "none" | "pending" | "verified" | "rejected";
+    stripeIdentityStatus: string;
+    stripeRequirements: string[];
+    stripeCheckedAt: string | null;
   };
   totals: {
     listings: number;
@@ -548,12 +551,18 @@ export async function hostProfile(hostId: string): Promise<AdminHostProfile> {
     commission_rate: string | null;
     default_rate: string | null;
     verification_status: string | null;
+    stripe_identity_status: string | null;
+    stripe_requirements: string[] | null;
+    stripe_checked_at: Date | null;
   }>(
     `SELECT h.display_name, h.hosting_since, h.superhost, u.banned_reason,
             c.commission_rate::text AS commission_rate,
             (SELECT commission_rate FROM platform_settings WHERE id = true)::text AS default_rate,
             (SELECT v.status::text FROM identity_verification v
-              WHERE v.user_id = u.id ORDER BY v.created_at DESC LIMIT 1) AS verification_status
+              WHERE v.user_id = u.id ORDER BY v.created_at DESC LIMIT 1) AS verification_status,
+            (SELECT v.stripe_status FROM identity_verification v WHERE v.user_id = u.id LIMIT 1) AS stripe_identity_status,
+            (SELECT v.stripe_requirements FROM identity_verification v WHERE v.user_id = u.id LIMIT 1) AS stripe_requirements,
+            (SELECT v.stripe_checked_at FROM identity_verification v WHERE v.user_id = u.id LIMIT 1) AS stripe_checked_at
        FROM app_user u
        LEFT JOIN host_profile h ON h.user_id = u.id
        LEFT JOIN host_commission c ON c.host_id = u.id
@@ -655,6 +664,9 @@ export async function hostProfile(hostId: string): Promise<AdminHostProfile> {
         : Number(extra.commission_rate),
       defaultCommissionRate: Number(extra?.default_rate ?? 0),
       verificationStatus: (extra?.verification_status ?? "none") as "none" | "pending" | "verified" | "rejected",
+      stripeIdentityStatus: extra?.stripe_identity_status ?? "not_connected",
+      stripeRequirements: extra?.stripe_requirements ?? [],
+      stripeCheckedAt: extra?.stripe_checked_at ? extra.stripe_checked_at.toISOString() : null,
     },
     totals: {
       listings: listingRows.length,

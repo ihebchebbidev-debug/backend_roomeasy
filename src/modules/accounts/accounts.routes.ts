@@ -30,6 +30,13 @@ import {
   verifyCredentials,
 } from "@/modules/accounts/accounts.repository.js";
 import type { AccountDto } from "@/modules/accounts/accounts.repository.js";
+import {
+  assertSecondFactor,
+  beginTwoFactorSetup,
+  confirmTwoFactorSetup,
+  disableTwoFactor,
+} from "@/modules/accounts/twoFactor.repository.js";
+import { otpauthUrl } from "@/core/totp.js";
 
 export const accountsRouter = Router();
 
@@ -44,7 +51,11 @@ const signupSchema = z.object({
   asHost: z.boolean().optional(),
 });
 
-const loginSchema = z.object({ email: emailField, password: z.string().min(1, "Enter your password.") });
+const loginSchema = z.object({
+  email: emailField,
+  password: z.string().min(1, "Enter your password."),
+  otp: z.string().trim().max(12).optional(),
+});
 
 const profileSchema = z
   .object({
@@ -52,7 +63,6 @@ const profileSchema = z
     phone: z.string().trim().max(40).nullable().optional(),
     locale: z.enum(["en", "fr", "es", "de", "pt"]).optional(),
     currency: z.string().trim().length(3).optional(),
-    twoFactorEnabled: z.boolean().optional(),
   })
   .refine((value) => Object.keys(value).length > 0, "Send at least one field to change.");
 
@@ -116,6 +126,7 @@ accountsRouter.post(
   asyncHandler(async (req, res) => {
     const body = validateBody(loginSchema, req);
     const account = await verifyCredentials(body.email, body.password);
+    await assertSecondFactor(account.id, body.otp);
     req.log.info({ userId: account.id }, "sign-in succeeded");
     return ok(res, session(account));
   }),
@@ -342,6 +353,11 @@ accountsRouter.post(
   authLimiter,
   asyncHandler(async (req, res) => {
     if (isProduction) throw apiError("FORBIDDEN", { message: "This helper is disabled in production." });
+    // Defence in depth: even outside production, a shared secret is required.
+    const secret = req.get("x-dev-admin-secret") ?? "";
+    if (!env.DEV_ADMIN_SECRET || secret !== env.DEV_ADMIN_SECRET) {
+      throw apiError("FORBIDDEN", { message: "The dev admin secret is missing or wrong." });
+    }
 
     const body = validateBody(
       z.object({
@@ -384,5 +400,36 @@ accountsRouter.post(
       choice: body.choice,
     });
     return noContent(res);
+  }),
+);
+
+/** Two-step sign-in (authenticator app). Available to every member, recommended for admins. */
+accountsRouter.post(
+  "/2fa/setup",
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const user = currentUser(req);
+    const secret = await beginTwoFactorSetup(user.userId);
+    return ok(res, { secret, otpauthUrl: otpauthUrl({ issuer: env.TOTP_ISSUER, account: user.email, secret }) });
+  }),
+);
+
+accountsRouter.post(
+  "/2fa/enable",
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const body = validateBody(z.object({ code: z.string().trim().min(6).max(12) }), req);
+    await confirmTwoFactorSetup(currentUser(req).userId, body.code);
+    return ok(res, { enabled: true });
+  }),
+);
+
+accountsRouter.post(
+  "/2fa/disable",
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const body = validateBody(z.object({ code: z.string().trim().max(12).default("") }), req);
+    await disableTwoFactor(currentUser(req).userId, body.code);
+    return ok(res, { enabled: false });
   }),
 );

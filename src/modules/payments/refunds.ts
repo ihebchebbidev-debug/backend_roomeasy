@@ -6,10 +6,10 @@ import { requireStripe, stripeEnabled, toMinorUnits } from "@/modules/payments/s
  * a real charge exists. Call this BEFORE writing "refunded" in our own tables
  * so a Stripe failure never leaves the database claiming money moved.
  */
-export async function refundThroughStripe(bookingId: string, amountUsd: number): Promise<void> {
-  if (!stripeEnabled() || amountUsd <= 0) return;
+export async function refundThroughStripe(bookingId: string, amountUsd: number): Promise<string | null> {
+  if (!stripeEnabled() || amountUsd <= 0) return null;
   const payment = await stripePaymentForBooking(bookingId);
-  if (!payment || (!payment.intentId && !payment.chargeId)) return;
+  if (!payment || (!payment.intentId && !payment.chargeId)) return null;
 
   const stripe = requireStripe();
 
@@ -24,9 +24,9 @@ export async function refundThroughStripe(bookingId: string, amountUsd: number):
       intent.status === "requires_action"
     ) {
       await stripe.paymentIntents.cancel(payment.intentId, { cancellation_reason: "requested_by_customer" });
-      return;
+      return null;
     }
-    if (intent.status === "canceled") return;
+    if (intent.status === "canceled") return null;
   }
 
   // Part of the money may already have been sent back (a partial refund, then
@@ -46,16 +46,17 @@ export async function refundThroughStripe(bookingId: string, amountUsd: number):
   } catch {
     // Reading the charge is only an optimisation: fall back to the booking amount.
   }
-  if (remainingMinor <= 0) return;
+  if (remainingMinor <= 0) return null;
 
   const amountMinor = Math.min(toMinorUnits(amountUsd), remainingMinor);
-  if (amountMinor <= 0) return;
+  if (amountMinor <= 0) return null;
 
-  await stripe.refunds.create({
+  const refund = await stripe.refunds.create({
     ...(payment.intentId ? { payment_intent: payment.intentId } : { charge: payment.chargeId as string }),
     amount: amountMinor,
     metadata: { bookingId },
   });
+  return refund.id;
 }
 
 /**

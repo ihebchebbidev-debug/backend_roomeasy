@@ -191,7 +191,9 @@ async function wipeDemoData(): Promise<void> {
     `DELETE FROM listing WHERE id LIKE 'demo-%'`,
     `DELETE FROM property WHERE id LIKE 'demo-%'`,
     `DELETE FROM notification_outbox WHERE recipient_email LIKE '%@${DEMO_EMAIL_DOMAIN}'`,
-    `DELETE FROM moderation_log WHERE target_id LIKE 'demo-%'`,
+    // The audit log is append-only; the demo wipe opts in for its own rows only.
+    `WITH m AS (SELECT set_config('app.audit_maintenance', 'on', true) AS on_)
+     DELETE FROM moderation_log WHERE target_id LIKE 'demo-%' AND (SELECT on_ FROM m) = 'on'`,
     `DELETE FROM booking_monthly_stat WHERE host_id IN (SELECT id FROM app_user WHERE email LIKE '%@${DEMO_EMAIL_DOMAIN}')`,
     `DELETE FROM app_user WHERE email LIKE '%@${DEMO_EMAIL_DOMAIN}'`,
   ];

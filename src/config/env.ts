@@ -71,6 +71,12 @@ const envSchema = z.object({
   PAYMENT_CURRENCY: z.string().length(3).default("EUR"),
 
 
+  // --- Back office -----------------------------------------------------------
+  /** Shared secret the /dev-admin helper must send; empty disables the helper. */
+  DEV_ADMIN_SECRET: z.string().default(""),
+  /** Issuer name shown in authenticator apps for admin two-step sign-in. */
+  TOTP_ISSUER: z.string().default("RoomEasy Admin"),
+
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace"]).default("info"),
   LOG_PRETTY: boolish(false),
   LOG_DIR: z.string().default("logs"),

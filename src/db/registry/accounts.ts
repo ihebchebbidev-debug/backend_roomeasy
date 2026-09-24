@@ -33,6 +33,8 @@ export const accountTables: TableDef[] = [
       { name: "locale", type: "text", notNull: true, default: "'en'" },
       { name: "currency", type: "text", notNull: true, default: "'USD'" },
       { name: "two_factor_enabled", type: "boolean", notNull: true, default: "false" },
+      { name: "two_factor_secret", type: "text", note: "Base32 TOTP secret, set once enrolment is confirmed." },
+      { name: "two_factor_pending_secret", type: "text", note: "Secret awaiting its first valid code." },
       { name: "joined_on", type: "date", notNull: true, default: "CURRENT_DATE" },
       { name: "last_login_at", type: "timestamptz" },
       {

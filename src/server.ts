@@ -5,6 +5,8 @@ import { env, isProduction } from "@/config/env.js";
 import { log } from "@/core/logger.js";
 import { reconcileSchema } from "@/db/migrate.js";
 import { syncEquipmentCatalogue } from "@/db/sync-equipment.js";
+import { seedTaxonomy } from "@/modules/admin/taxonomy.repository.js";
+import { seedCatalog } from "@/modules/admin/catalog.repository.js";
 import { closePool, databaseTarget } from "@/db/pool.js";
 import { startBookingMaintenanceWorker, stopBookingMaintenanceWorker } from "@/modules/bookings/bookings.maintenance.js";
 import { startNotificationWorker, stopNotificationWorker } from "@/modules/notifications/dispatcher.js";
@@ -31,6 +33,22 @@ async function bootstrap(): Promise<void> {
     logger.info({ count }, "equipment catalogue synced");
   } catch (error) {
     logger.error({ err: error }, "equipment catalogue sync failed");
+  }
+
+  // Default property types and countries, inserted once; admin edits are kept.
+  try {
+    const seeded = await seedTaxonomy();
+    logger.info(seeded, "property types and countries ready");
+  } catch (error) {
+    logger.error({ err: error }, "property type / country seed failed");
+  }
+
+  // Default cities and Terms/Privacy/Help pages, inserted once; admin edits are kept.
+  try {
+    const seeded = await seedCatalog();
+    logger.info(seeded, "default cities and pages ready");
+  } catch (error) {
+    logger.error({ err: error }, "city / page seed failed");
   }
 
   const mail = mailerStatus();
