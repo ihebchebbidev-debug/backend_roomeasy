@@ -8,9 +8,11 @@ type ReportRow = {
   id: string;
   listing_id: string;
   property_name: string | null;
+  property_image: string | null;
   host_id: string | null;
   host_name: string | null;
   reporter_name: string | null;
+  reporter_avatar: string | null;
   reported_by: string | null;
   reason: ReportReason;
   details: string | null;
@@ -25,10 +27,12 @@ function mapReport(row: ReportRow) {
     id: row.id,
     listingId: row.listing_id,
     propertyName: row.property_name,
+    propertyImage: row.property_image,
     hostId: row.host_id,
     hostName: row.host_name,
     reporterId: row.reported_by,
     reporterName: row.reporter_name,
+    reporterAvatar: row.reporter_avatar,
     reason: row.reason,
     details: row.details,
     status: row.status,
@@ -41,11 +45,14 @@ function mapReport(row: ReportRow) {
 const selectReport = `
   SELECT r.id, r.listing_id, p.name AS property_name, p.host_id, hu.full_name AS host_name,
          r.reporter_name, r.reported_by, r.reason, r.details, r.status, r.resolution,
-         r.handled_at, r.created_at
+         r.handled_at, r.created_at,
+         (SELECT url FROM property_photo WHERE property_id = p.id ORDER BY position LIMIT 1) AS property_image,
+         ru.avatar_url AS reporter_avatar
     FROM listing_report r
     LEFT JOIN listing l ON l.id = r.listing_id
     LEFT JOIN property p ON p.id = l.property_id
-    LEFT JOIN app_user hu ON hu.id = p.host_id`;
+    LEFT JOIN app_user hu ON hu.id = p.host_id
+    LEFT JOIN app_user ru ON ru.id = r.reported_by`;
 
 /**
  * Accepts a listing id or the property id shown in the address bar — the stay
