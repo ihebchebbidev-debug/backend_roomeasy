@@ -97,13 +97,13 @@ function mask(value: string): string {
   return `••••${value.slice(-4)}`;
 }
 
-/** Safe view for the back office: secrets are masked. */
+/** Back office view (admin only): real values, exactly as stored or in .env. */
 export function integrationView() {
   return Object.fromEntries(
     INTEGRATION_KEYS.map((key) => {
       const value = cfg(key);
       const secret = SECRET_KEYS.includes(key);
-      return [key, { value: secret ? "" : value, masked: secret ? mask(value) : null, set: value !== "", secret, source: cfgSource(key) }];
+      return [key, { value, masked: secret ? mask(value) : null, set: value !== "", secret, source: cfgSource(key) }];
     }),
   );
 }

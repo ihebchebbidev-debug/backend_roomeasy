@@ -4,18 +4,18 @@ import { query } from "@/db/query.js";
 export type EquipmentDto = {
   id: string;
   group: string;
-  label: { en: string; fr: string };
+  label: { en: string; fr: string; es: string; de: string; pt: string };
   paid: boolean;
   active: boolean;
 };
 
-type EquipmentRow = { id: string; group: string; label_en: string; label_fr: string; paid: boolean; active: boolean };
+type EquipmentRow = { id: string; group: string; label_en: string; label_fr: string; label_es: string; label_de: string; label_pt: string; paid: boolean; active: boolean };
 
 function mapEquipment(row: EquipmentRow): EquipmentDto {
   return {
     id: row.id,
     group: row.group,
-    label: { en: row.label_en, fr: row.label_fr },
+    label: { en: row.label_en, fr: row.label_fr, es: row.label_es || row.label_en, de: row.label_de || row.label_en, pt: row.label_pt || row.label_en },
     paid: row.paid,
     active: row.active,
   };
@@ -41,7 +41,7 @@ export async function listEquipment(options: {
   }
 
   const rows = await query<EquipmentRow>(
-    `SELECT id, "group"::text AS "group", label_en, label_fr, paid, active
+    `SELECT id, "group"::text AS "group", label_en, label_fr, label_es, label_de, label_pt, paid, active
        FROM equipment
      ${clauses.length ? `WHERE ${clauses.join(" AND ")}` : ""}
       ORDER BY "group", label_en`,

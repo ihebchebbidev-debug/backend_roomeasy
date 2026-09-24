@@ -3,28 +3,32 @@ import { query, queryOne } from "@/db/query.js";
 
 /* ------------------------------------------------------------------ amenities */
 
-export type AmenityRow = { id: string; group: string; label_en: string; label_fr: string; paid: boolean; active: boolean };
+export type AmenityRow = { id: string; group: string; label_en: string; label_fr: string; label_es: string; label_de: string; label_pt: string; paid: boolean; active: boolean };
 
 export async function upsertAmenity(input: {
   id: string;
   group: string;
   labelEn: string;
   labelFr: string;
+  labelEs?: string;
+  labelDe?: string;
+  labelPt?: string;
   paid: boolean;
   active: boolean;
 }) {
   const row = await queryOne<AmenityRow>(
-    `INSERT INTO equipment (id, "group", label_en, label_fr, paid, active)
-     VALUES ($1, $2::equipment_group, $3, $4, $5, $6)
+    `INSERT INTO equipment (id, "group", label_en, label_fr, paid, active, label_es, label_de, label_pt)
+     VALUES ($1, $2::equipment_group, $3, $4, $5, $6, $7, $8, $9)
      ON CONFLICT (id) DO UPDATE
         SET "group" = EXCLUDED."group", label_en = EXCLUDED.label_en, label_fr = EXCLUDED.label_fr,
+            label_es = EXCLUDED.label_es, label_de = EXCLUDED.label_de, label_pt = EXCLUDED.label_pt,
             paid = EXCLUDED.paid, active = EXCLUDED.active
-     RETURNING id, "group"::text AS "group", label_en, label_fr, paid, active`,
-    [input.id, input.group, input.labelEn, input.labelFr, input.paid, input.active],
+     RETURNING id, "group"::text AS "group", label_en, label_fr, label_es, label_de, label_pt, paid, active`,
+    [input.id, input.group, input.labelEn, input.labelFr, input.paid, input.active, input.labelEs ?? "", input.labelDe ?? "", input.labelPt ?? ""],
     { label: "catalog.amenity.upsert" },
   );
   if (!row) throw apiError("INTERNAL");
-  return { id: row.id, group: row.group, label: { en: row.label_en, fr: row.label_fr }, paid: row.paid, active: row.active };
+  return { id: row.id, group: row.group, label: { en: row.label_en, fr: row.label_fr, es: row.label_es, de: row.label_de, pt: row.label_pt }, paid: row.paid, active: row.active };
 }
 
 /** Amenities in use are retired (inactive) instead of deleted so listings keep their data. */
