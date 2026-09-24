@@ -48,7 +48,7 @@ const searchQuerySchema = z.object({
     .transform((value) => (value === undefined ? undefined : ["1", "true", "yes"].includes(value.toLowerCase()))),
   from: isoDate.optional(),
   to: isoDate.optional(),
-  sort: z.enum(["recommended", "price-low", "price-high", "rating", "distance"]).default("recommended"),
+  sort: z.enum(["recommended", "price-low", "price-high", "rating", "distance", "newest"]).default("recommended"),
   locale: z.enum(["en", "fr", "es", "de", "pt"]).default("en"),
   limit: z.coerce.number().int().min(1).max(100).default(24),
   offset: z.coerce.number().int().min(0).max(100_000).default(0),

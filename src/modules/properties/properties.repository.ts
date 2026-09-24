@@ -198,7 +198,7 @@ export type SearchFilters = {
   superhost?: boolean;
   from?: string;
   to?: string;
-  sort?: "recommended" | "price-low" | "price-high" | "rating" | "distance";
+  sort?: "recommended" | "price-low" | "price-high" | "rating" | "distance" | "newest";
   lat?: number;
   lng?: number;
   limit: number;
@@ -290,6 +290,8 @@ function orderBy(filters: SearchFilters): string {
       return `coalesce(l.nightly_usd, p.base_price_usd) ASC, p.name ASC`;
     case "price-high":
       return `coalesce(l.nightly_usd, p.base_price_usd) DESC, p.name ASC`;
+    case "newest":
+      return `p.created_at DESC, p.name ASC`;
     case "rating":
       return `p.rating DESC, p.review_count DESC, p.name ASC`;
     case "distance":

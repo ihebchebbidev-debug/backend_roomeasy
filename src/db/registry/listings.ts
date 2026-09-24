@@ -187,7 +187,6 @@ export const listingTables: TableDef[] = [
         type: "jsonb",
         notNull: true,
         default: "'{}'::jsonb",
-        comment: "Per-listing smart-pricing rule set (see domain/smartPricingEngine.ts). Empty object = all rules off.",
       },
       { name: "published_at", type: "timestamptz" },
       { name: "created_at", type: "timestamptz", notNull: true, default: "now()" },
