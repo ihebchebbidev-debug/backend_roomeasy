@@ -233,7 +233,7 @@ async function insertUser(options: {
       options.banned ?? false,
       options.banned ? "Fraude au paiement confirmée" : null,
       options.banned ? daysAgo(between(5, 60)).toISOString() : null,
-      `https://i.pravatar.cc/240?u=${encodeURIComponent(options.email)}`,
+      null,
       options.locale ?? "fr",
       iso(daysAgo(options.joinedDaysAgo)),
       daysAgo(between(0, 20)).toISOString(),

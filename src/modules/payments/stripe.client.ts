@@ -2,6 +2,7 @@ import Stripe from "stripe";
 
 import { env } from "@/config/env.js";
 import { log } from "@/core/logger.js";
+import { cfg, onIntegrationChange } from "@/modules/settings/integration-config.js";
 
 const logger = log("stripe");
 
@@ -12,21 +13,24 @@ const logger = log("stripe");
  */
 
 let client: Stripe | null = null;
+onIntegrationChange(() => {
+  client = null;
+});
 
 export function stripeEnabled(): boolean {
-  return env.STRIPE_SECRET_KEY.trim().length > 0;
+  return cfg("STRIPE_SECRET_KEY").trim().length > 0;
 }
 
 export function stripeClient(): Stripe | null {
   if (!stripeEnabled()) return null;
   if (!client) {
-    client = new Stripe(env.STRIPE_SECRET_KEY, {
+    client = new Stripe(cfg("STRIPE_SECRET_KEY"), {
       apiVersion: "2024-06-20" as Stripe.LatestApiVersion,
       appInfo: { name: env.APP_NAME },
       maxNetworkRetries: 2,
       timeout: 20_000,
     });
-    logger.info({ mode: env.STRIPE_SECRET_KEY.startsWith("sk_live") ? "live" : "test" }, "stripe client ready");
+    logger.info({ mode: cfg("STRIPE_SECRET_KEY").startsWith("sk_live") ? "live" : "test" }, "stripe client ready");
   }
   return client;
 }
@@ -49,16 +53,16 @@ export type StripeStatus = {
 
 export function stripeStatus(): StripeStatus {
   const missing: string[] = [];
-  if (!env.STRIPE_SECRET_KEY) missing.push("STRIPE_SECRET_KEY");
-  if (!env.STRIPE_PUBLISHABLE_KEY) missing.push("STRIPE_PUBLISHABLE_KEY");
-  if (!env.STRIPE_WEBHOOK_SECRET) missing.push("STRIPE_WEBHOOK_SECRET");
+  if (!cfg("STRIPE_SECRET_KEY")) missing.push("STRIPE_SECRET_KEY");
+  if (!cfg("STRIPE_PUBLISHABLE_KEY")) missing.push("STRIPE_PUBLISHABLE_KEY");
+  if (!cfg("STRIPE_WEBHOOK_SECRET")) missing.push("STRIPE_WEBHOOK_SECRET");
 
   return {
     enabled: stripeEnabled(),
-    mode: stripeEnabled() ? (env.STRIPE_SECRET_KEY.startsWith("sk_live") ? "live" : "test") : null,
-    publishableKey: env.STRIPE_PUBLISHABLE_KEY || null,
+    mode: stripeEnabled() ? (cfg("STRIPE_SECRET_KEY").startsWith("sk_live") ? "live" : "test") : null,
+    publishableKey: cfg("STRIPE_PUBLISHABLE_KEY") || null,
     connectReady: stripeEnabled(),
-    webhookReady: env.STRIPE_WEBHOOK_SECRET.trim().length > 0,
+    webhookReady: cfg("STRIPE_WEBHOOK_SECRET").trim().length > 0,
     currency: env.PAYMENT_CURRENCY,
     missing,
   };

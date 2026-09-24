@@ -10,6 +10,7 @@ import { seedCatalog } from "@/modules/admin/catalog.repository.js";
 import { closePool, databaseTarget } from "@/db/pool.js";
 import { startBookingMaintenanceWorker, stopBookingMaintenanceWorker } from "@/modules/bookings/bookings.maintenance.js";
 import { startNotificationWorker, stopNotificationWorker } from "@/modules/notifications/dispatcher.js";
+import { loadIntegrationConfig } from "@/modules/settings/integration-config.js";
 import { mailerStatus } from "@/modules/notifications/mailer.js";
 import { stripeStatus } from "@/modules/payments/stripe.client.js";
 
@@ -51,6 +52,7 @@ async function bootstrap(): Promise<void> {
     logger.error({ err: error }, "city / page seed failed");
   }
 
+  await loadIntegrationConfig();
   const mail = mailerStatus();
   const stripe = stripeStatus();
   logger.info(

@@ -5,18 +5,17 @@ import { log } from "@/core/logger.js";
 
 const logger = log("mailer");
 
-/**
- * Mailbox credentials are pinned here on purpose (no .env involved).
- * OVH: ssl0.ovh.net, 465 implicit SSL (use 587 + secure:false for STARTTLS).
- */
+import { cfg, cfgBool, onIntegrationChange } from "@/modules/settings/integration-config.js";
+
+/** Mailbox settings come from the back office (Réglages), falling back to .env. */
 const SMTP = {
-  host: "ssl0.ovh.net",
-  port: 465,
-  secure: true, // false when port is 587 (STARTTLS)
-  user: "remquip_email_confirmationaccoun@luccibyey.com.tn",
-  password: "Dadouhibou2025",
-  from: "remquip_email_confirmationaccoun@luccibyey.com.tn",
-} as const;
+  get host() { return cfg("SMTP_HOST").trim(); },
+  get port() { return Number(cfg("SMTP_PORT")) || 465; },
+  get secure() { return cfgBool("SMTP_SECURE"); },
+  get user() { return cfg("SMTP_USER").trim(); },
+  get password() { return cfg("SMTP_PASSWORD"); },
+  get from() { return cfg("MAIL_FROM_ADDRESS").trim(); },
+};
 
 /**
  * SMTP delivery, written for OVH but valid for any provider.
@@ -56,7 +55,7 @@ function fromAddress(): string {
 
 export function mailFrom(): string {
   const address = fromAddress();
-  const name = env.MAIL_FROM_NAME.trim();
+  const name = cfg("MAIL_FROM_NAME").trim();
   if (!address) return "";
   return name ? `"${name.replace(/"/g, "")}" <${address}>` : address;
 }
@@ -65,7 +64,7 @@ export function mailerStatus(): MailerStatus {
   const missing = missingSettings();
   return {
     configured: missing.length === 0,
-    dryRun: env.MAIL_DRY_RUN,
+    dryRun: cfgBool("MAIL_DRY_RUN"),
     host: SMTP.host,
     port: SMTP.port,
     secure: SMTP.secure,
@@ -124,7 +123,7 @@ export type OutgoingMail = {
  * can mark the queue row as failed and retry later.
  */
 export async function sendMail(mail: OutgoingMail): Promise<{ messageId: string; dryRun: boolean }> {
-  if (env.MAIL_DRY_RUN) {
+  if (cfgBool("MAIL_DRY_RUN")) {
     logger.info({ to: mail.to, subject: mail.subject }, "mail dry run — not sent");
     return { messageId: `dry-run-${Date.now()}`, dryRun: true };
   }
@@ -138,7 +137,7 @@ export async function sendMail(mail: OutgoingMail): Promise<{ messageId: string;
     subject: mail.subject,
     text: mail.text,
     html: mail.html ?? undefined,
-    replyTo: mail.replyTo ?? env.MAIL_REPLY_TO ?? undefined,
+    replyTo: mail.replyTo ?? (cfg("MAIL_REPLY_TO").trim() || undefined),
     envelope: { from: fromAddress(), to: mail.to },
   });
 
@@ -149,3 +148,5 @@ export function resetMailer(): void {
   transporter?.close();
   transporter = null;
 }
+
+onIntegrationChange(resetMailer);

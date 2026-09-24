@@ -31,6 +31,18 @@ export const platformTables: TableDef[] = [
   },
 
   {
+    name: "integration_setting",
+    comment: "Email (SMTP) and Stripe credentials editable from the back office. Overrides the .env values.",
+    primaryKey: ["key"],
+    columns: [
+      { name: "key", type: "text", notNull: true },
+      { name: "value", type: "text", notNull: true, default: "''" },
+      { name: "updated_by", type: "uuid" },
+      { name: "updated_at", type: "timestamptz", notNull: true, default: "now()" },
+    ],
+  },
+
+  {
     name: "host_rate_rules",
     primaryKey: ["host_id"],
     columns: [

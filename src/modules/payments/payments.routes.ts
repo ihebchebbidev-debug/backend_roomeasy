@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { cfg } from "@/modules/settings/integration-config.js";
 import { z } from "zod";
 
 import { env } from "@/config/env.js";
@@ -199,7 +200,7 @@ paymentsRouter.post(
       const account = await stripe.accounts.create({
         type: "express",
         email: user.email,
-        country: country || env.STRIPE_CONNECT_COUNTRY || undefined,
+        country: country || cfg("STRIPE_CONNECT_COUNTRY") || undefined,
         capabilities: { card_payments: { requested: true }, transfers: { requested: true } },
         business_type: "individual",
         metadata: { hostId: user.userId },

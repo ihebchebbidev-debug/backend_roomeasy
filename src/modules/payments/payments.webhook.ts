@@ -1,4 +1,5 @@
 import { notifyBookingEvent } from "@/modules/notifications/bookingEmails.js";
+import { cfg } from "@/modules/settings/integration-config.js";
 import type { Request, Response } from "express";
 import type Stripe from "stripe";
 
@@ -28,7 +29,7 @@ const logger = log("stripe-webhook");
  * charge.refunded, account.updated, payout.paid.
  */
 export async function stripeWebhookHandler(req: Request, res: Response): Promise<void> {
-  if (!stripeEnabled() || !env.STRIPE_WEBHOOK_SECRET) {
+  if (!stripeEnabled() || !cfg("STRIPE_WEBHOOK_SECRET")) {
     res.status(503).json({ error: { code: "CONFLICT", message: "Stripe is not configured." } });
     return;
   }
@@ -42,7 +43,7 @@ export async function stripeWebhookHandler(req: Request, res: Response): Promise
   let event: Stripe.Event;
   try {
     const stripe = requireStripe();
-    event = stripe.webhooks.constructEvent(req.body as Buffer, signature, env.STRIPE_WEBHOOK_SECRET);
+    event = stripe.webhooks.constructEvent(req.body as Buffer, signature, cfg("STRIPE_WEBHOOK_SECRET"));
   } catch (error) {
     logger.warn({ err: error instanceof Error ? error.message : error }, "invalid stripe signature");
     res.status(400).json({ error: { code: "FORBIDDEN", message: "Invalid signature." } });

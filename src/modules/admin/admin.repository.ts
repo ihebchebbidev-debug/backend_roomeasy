@@ -319,6 +319,7 @@ export type AdminUserRow = {
   lastLoginAt: string | null;
   bookings: number;
   listings: number;
+  verificationStatus: "none" | "pending" | "verified" | "rejected";
 };
 
 export async function listUsers(options: {
@@ -382,13 +383,15 @@ export async function listUsers(options: {
     last_login_at: Date | null;
     bookings: string;
     listings: string;
+    verification_status: string | null;
   }>(
     `SELECT u.id, u.full_name, u.email, u.phone, u.verified, u.suspended, u.suspended_reason,
             u.suspended_until, u.banned,
             u.joined_on, u.last_login_at,
             (SELECT array_agg(g.role::text) FROM user_role_grant g WHERE g.user_id = u.id) AS roles,
             (SELECT count(*) FROM booking b WHERE b.guest_id = u.id) AS bookings,
-            (SELECT count(*) FROM property p WHERE p.host_id = u.id) AS listings
+            (SELECT count(*) FROM property p WHERE p.host_id = u.id) AS listings,
+            (SELECT v.status::text FROM identity_verification v WHERE v.user_id = u.id LIMIT 1) AS verification_status
        FROM app_user u
        ${clause}
       ORDER BY u.created_at DESC
@@ -417,6 +420,7 @@ export async function listUsers(options: {
       lastLoginAt: row.last_login_at ? row.last_login_at.toISOString() : null,
       bookings: Number(row.bookings),
       listings: Number(row.listings),
+      verificationStatus: (row.verification_status ?? "none") as AdminUserRow["verificationStatus"],
     })),
     total: Number(total?.total ?? 0),
   };
@@ -529,9 +533,20 @@ export type AdminHostProfile = {
     status: string;
     documentKind: string | null;
     documentReference: string | null;
+    documentFiles: string[] | null;
     notes: string | null;
     createdAt: string;
     decidedAt: string | null;
+  }>;
+  trips: Array<{
+    id: string;
+    reference: string;
+    propertyId: string;
+    propertyName: string;
+    checkIn: string;
+    checkOut: string;
+    status: string;
+    totalUsd: number;
   }>;
 };
 
@@ -648,6 +663,27 @@ export async function hostProfile(hostId: string): Promise<AdminHostProfile> {
     { label: "admin.hostProfile.documents" },
   );
 
+  const tripRows = await query<{
+    id: string;
+    reference: string;
+    property_id: string;
+    property_name: string;
+    check_in: Date;
+    check_out: Date;
+    status: string;
+    total_usd: string;
+  }>(
+    `SELECT b.id, b.reference, b.property_id, p.name AS property_name,
+            b.check_in, b.check_out, b.status::text AS status, b.total_usd
+       FROM booking b
+       JOIN property p ON p.id = b.property_id
+      WHERE b.guest_id = $1
+      ORDER BY b.check_in DESC
+      LIMIT 100`,
+    [hostId],
+    { label: "admin.hostProfile.trips" },
+  );
+
   const earning = bookingRows.filter((row) => row.status === "confirmed" || row.status === "completed");
   const visibleReviews = reviewRows.filter((row) => !row.hidden);
   const ratingSum = visibleReviews.reduce((sum, row) => sum + row.rating, 0);
@@ -710,6 +746,16 @@ export async function hostProfile(hostId: string): Promise<AdminHostProfile> {
       notes: row.notes,
       createdAt: row.created_at.toISOString(),
       decidedAt: row.decided_at ? row.decided_at.toISOString() : null,
+    })),
+    trips: tripRows.map((row) => ({
+      id: row.id,
+      reference: row.reference,
+      propertyId: row.property_id,
+      propertyName: row.property_name,
+      checkIn: row.check_in.toISOString().slice(0, 10),
+      checkOut: row.check_out.toISOString().slice(0, 10),
+      status: row.status,
+      totalUsd: Number(row.total_usd),
     })),
   };
 }
