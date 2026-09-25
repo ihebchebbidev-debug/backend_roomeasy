@@ -46,6 +46,34 @@ const searchQuerySchema = z.object({
     .string()
     .optional()
     .transform((value) => (value === undefined ? undefined : ["1", "true", "yes"].includes(value.toLowerCase()))),
+  instantBook: z
+    .string()
+    .optional()
+    .transform((value) => (value === undefined ? undefined : ["1", "true", "yes"].includes(value.toLowerCase()))),
+  freeCancellation: z
+    .string()
+    .optional()
+    .transform((value) => (value === undefined ? undefined : ["1", "true", "yes"].includes(value.toLowerCase()))),
+  nights: z.coerce.number().int().min(1).max(365).optional(),
+  bounds: z
+    .string()
+    .max(80)
+    .optional()
+    .transform((value, ctx) => {
+      if (!value) return undefined;
+      const parts = value.split(",").map(Number);
+      const [south, west, north, east] = parts;
+      if (
+        parts.length !== 4 ||
+        parts.some((n) => !Number.isFinite(n)) ||
+        south! < -90 || north! > 90 || south! > north! ||
+        west! < -180 || west! > 180 || east! < -180 || east! > 180
+      ) {
+        ctx.addIssue({ code: "custom", message: "bounds must be south,west,north,east" });
+        return z.NEVER;
+      }
+      return { south: south!, west: west!, north: north!, east: east! };
+    }),
   from: isoDate.optional(),
   to: isoDate.optional(),
   sort: z.enum(["recommended", "price-low", "price-high", "rating", "distance", "newest"]).default("recommended"),

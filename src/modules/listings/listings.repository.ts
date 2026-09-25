@@ -22,6 +22,7 @@ export type ListingDraft = {
   equipment: string[];
   photos: string[];
   pricing: {
+    currency?: string;
     nightlyUsd: number;
     cleaningFeeUsd: number;
     minNights: number;
@@ -57,6 +58,7 @@ export type HostListingRow = {
   status: string;
   approved: boolean;
   rejectedReason: string | null;
+  currency: string;
   nightlyUsd: number;
   longStay: { enabled: boolean; threshold: number; discount: number };
   mobile: { enabled: boolean; discount: number };
@@ -282,12 +284,13 @@ export async function saveListing(input: {
     const listing = await queryOne<{ updated_at: Date }>(
       `INSERT INTO listing (
          id, property_id, status, nightly_usd, long_stay_enabled, long_stay_threshold, long_stay_discount,
-         mobile_enabled, mobile_discount, published_at)
-       VALUES ($1, $2, $3::listing_status, $4, $5, $6, $7, $8, $9,
+         mobile_enabled, mobile_discount, currency, published_at)
+       VALUES ($1, $2, $3::listing_status, $4, $5, $6, $7, $8, $9, $10,
                CASE WHEN $3 = 'published' THEN now() ELSE NULL END)
        ON CONFLICT (id) DO UPDATE SET
          status = excluded.status,
          nightly_usd = excluded.nightly_usd,
+         currency = excluded.currency,
          long_stay_enabled = excluded.long_stay_enabled,
          long_stay_threshold = excluded.long_stay_threshold,
          long_stay_discount = excluded.long_stay_discount,
@@ -311,6 +314,7 @@ export async function saveListing(input: {
         draft.pricing.longStay.discount,
         draft.pricing.mobile.enabled,
         draft.pricing.mobile.discount,
+        draft.pricing.currency ?? "EUR",
       ],
       { client, label: "listings.upsertListing" },
     );
@@ -405,6 +409,7 @@ export async function listHostListings(hostId: string): Promise<HostListingRow[]
     status: string;
     approved: boolean;
     rejected_reason: string | null;
+    currency: string;
     nightly_usd: string;
     long_stay_enabled: boolean;
     long_stay_threshold: number;
@@ -420,7 +425,7 @@ export async function listHostListings(hostId: string): Promise<HostListingRow[]
     updated_at: Date;
   }>(
     `SELECT l.id AS listing_id, l.property_id, p.name, p.city, p.country, p.category::text AS category,
-            l.status::text AS status, l.approved, l.rejected_reason, l.nightly_usd,
+            l.status::text AS status, l.approved, l.rejected_reason, l.nightly_usd, l.currency,
             l.long_stay_enabled, l.long_stay_threshold, l.long_stay_discount,
             l.mobile_enabled, l.mobile_discount, p.guests,
             p.rating, p.review_count,
@@ -446,6 +451,7 @@ export async function listHostListings(hostId: string): Promise<HostListingRow[]
     status: row.status,
     approved: row.approved,
     rejectedReason: row.rejected_reason,
+    currency: (row.currency ?? "EUR").trim(),
     nightlyUsd: Number(row.nightly_usd),
     longStay: {
       enabled: row.long_stay_enabled,

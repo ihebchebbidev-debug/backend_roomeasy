@@ -80,7 +80,7 @@ paymentsRouter.post(
           clientSecret: existing.client_secret,
           intentId: existing.id,
           amount: booking.totalUsd,
-          currency: env.PAYMENT_CURRENCY,
+          currency: (booking.currency || env.PAYMENT_CURRENCY).trim(),
           commissionUsd: commission / 100,
           splitToHost: canSplit,
           holdOnly: !booking.instantBook,
@@ -94,7 +94,7 @@ paymentsRouter.post(
 
     const intent = await stripe.paymentIntents.create({
       amount,
-      currency: env.PAYMENT_CURRENCY.toLowerCase(),
+      currency: (booking.currency || env.PAYMENT_CURRENCY).trim().toLowerCase(),
       // Cards only: no Klarna, Amazon Pay or Satispay at checkout.
       payment_method_types: ["card"],
       // A request the host can still refuse is only held on the card: the
@@ -129,7 +129,7 @@ paymentsRouter.post(
       clientSecret: intent.client_secret,
       intentId: intent.id,
       amount: booking.totalUsd,
-      currency: env.PAYMENT_CURRENCY,
+      currency: (booking.currency || env.PAYMENT_CURRENCY).trim(),
       commissionUsd: commission / 100,
       splitToHost: canSplit,
       holdOnly: !booking.instantBook,

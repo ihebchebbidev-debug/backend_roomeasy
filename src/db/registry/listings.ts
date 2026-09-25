@@ -162,6 +162,14 @@ export const listingTables: TableDef[] = [
         default: "100",
         check: "nightly_usd BETWEEN 10 AND 100000",
       },
+      {
+        name: "currency",
+        type: "char(3)",
+        notNull: true,
+        default: "'EUR'",
+        check: "currency IN ('EUR','USD','GBP','CHF','BRL')",
+        note: "Currency the host prices this listing in (nightly, cleaning fee, calendar, floor/ceiling).",
+      },
       { name: "long_stay_enabled", type: "boolean", notNull: true, default: "false" },
       {
         name: "long_stay_threshold",

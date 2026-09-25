@@ -618,8 +618,10 @@ export async function seedDemoData(): Promise<DemoSeedReport> {
         `INSERT INTO booking (id, reference, property_id, guest_id, guest_name, guest_email, guest_phone, message,
                               check_in, check_out, guests, status, is_mobile_booking, currency, nightly_usd,
                               base_subtotal, subtotal, cleaning_fee, service_fee, taxes, total_usd,
-                              decided_at, decided_by, created_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::booking_status,$13,'EUR',$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)`,
+                              decided_at, decided_by, created_at, commission_rate)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::booking_status,$13,'EUR',$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,
+                 COALESCE((SELECT hc.commission_rate FROM property p JOIN host_commission hc ON hc.host_id = p.host_id WHERE p.id = $3),
+                          (SELECT commission_rate FROM platform_settings WHERE id = true), 0))`,
         [
           bookingId,
           `RE-${String(100000 + bookingCounter)}`,

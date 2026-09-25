@@ -7,13 +7,13 @@ import { bookingId as newBookingId, bookingReference, paymentIntentReference } f
 import { logger } from "@/core/logger.js";
 import { query, queryOne, transaction } from "@/db/query.js";
 import { refundFor, type CancellationPolicy } from "@/domain/cancellation.js";
-import { authorizeCard, type CardInput } from "@/domain/cards.js";
 import { computeQuote, smartRulesActive, type PriceBreakdown } from "@/domain/pricing.js";
 import { normalizeSmartRules } from "@/domain/smartPricingRules.js";
 import { calendarMap } from "@/modules/listings/calendar.repository.js";
 import { capturePaymentForBooking, refundThroughStripe } from "@/modules/payments/refunds.js";
 
 import { notifyBookingEvent } from "@/modules/notifications/bookingEmails.js";
+import { getRates } from "@/modules/currency/currency.repository.js";
 import { getHostRateRules, getPlatformSettings } from "@/modules/settings/settings.repository.js";
 
 export type BookingStatus = "pending" | "confirmed" | "declined" | "cancelled" | "completed";
@@ -50,9 +50,11 @@ export type BookingDto = {
   guests: number;
   status: BookingStatus;
   isMobileBooking: boolean;
-  currency: "EUR";
+  currency: string;
+  /** Units of `currency` per 1 EUR on the booking day. */
+  fxRateToEur: number;
   price: {
-    currency: "EUR";
+    currency: string;
     nightly: number;
     nights: number;
     baseSubtotal: number;
@@ -109,6 +111,7 @@ type BookingRow = {
   status: BookingStatus;
   is_mobile_booking: boolean;
   currency: string;
+  fx_rate_to_eur: string | null;
   nightly_usd: string;
   base_subtotal: string;
   subtotal: string;
@@ -137,7 +140,7 @@ const SELECT_BOOKING = `
          p.country AS property_country, p.host_id, p.cancellation_policy,
          (SELECT url FROM property_photo ph WHERE ph.property_id = p.id ORDER BY ph.position LIMIT 1) AS property_photo,
          b.guest_id, b.guest_name, b.guest_email, b.guest_phone, b.message,
-         b.check_in, b.check_out, b.guests, b.status, b.is_mobile_booking, b.currency,
+         b.check_in, b.check_out, b.guests, b.status, b.is_mobile_booking, b.currency, b.fx_rate_to_eur,
          b.nightly_usd, b.base_subtotal, b.subtotal, b.cleaning_fee, b.service_fee, b.taxes, b.total_usd,
          (SELECT json_agg(json_build_object('kind', d.kind, 'percent', d.percent, 'amount_usd', d.amount_usd))
             FROM booking_discount d WHERE d.booking_id = b.id) AS discounts,
@@ -178,9 +181,10 @@ function mapBooking(row: BookingRow): BookingDto {
     guests: row.guests,
     status: row.status,
     isMobileBooking: row.is_mobile_booking,
-    currency: "EUR",
+    currency: row.currency.trim(),
+    fxRateToEur: Number(row.fx_rate_to_eur ?? 1),
     price: {
-      currency: "EUR",
+      currency: row.currency.trim(),
       nightly,
       nights,
       baseSubtotal: Number(row.base_subtotal),
@@ -247,6 +251,7 @@ type StayRow = {
   mobile_enabled: boolean;
   mobile_discount: string;
   smart_pricing_rules: unknown;
+  currency: string | null;
 };
 
 /** The live pricing + policy record a quote or booking is built from. */
@@ -256,7 +261,8 @@ export async function loadStay(propertyId: string, client?: PoolClient): Promise
             p.cancellation_policy, p.instant_book,
             l.nightly_usd, l.status::text AS status, l.approved,
             l.long_stay_enabled, l.long_stay_threshold, l.long_stay_discount,
-            l.mobile_enabled, l.mobile_discount, l.smart_pricing_rules
+            l.mobile_enabled, l.mobile_discount, l.smart_pricing_rules,
+            l.currency
        FROM property p
        LEFT JOIN listing l ON l.property_id = p.id
       WHERE p.id = $1`,
@@ -448,6 +454,7 @@ export async function quoteStay(input: {
     : null;
 
   const quote = computeQuote({
+    currency: stay.currency?.trim() || "EUR",
     smart,
     from: input.from,
     to: input.to,
@@ -480,8 +487,6 @@ export async function createBooking(input: {
   guests: number;
   guest: { name: string; email?: string | null; phone?: string | null };
   message?: string | null;
-  /** Left out when the guest pays through Stripe; the payment row stays pending. */
-  card?: CardInput;
   isMobile?: boolean;
   guestId: string | null;
 }): Promise<BookingDto> {
@@ -495,6 +500,18 @@ export async function createBooking(input: {
 
   if (stay.host_id && input.guestId && stay.host_id === input.guestId) {
     throw apiError("OWN_PROPERTY_BOOKING");
+  }
+  // Freeze the day's rate so receipts and finance never move afterwards.
+  let fxRateToEur = 1;
+  if (quote.currency !== "EUR") {
+    const { rates } = await getRates();
+    const rate = rates[quote.currency];
+    if (!rate) {
+      throw apiError("CONFLICT", {
+        message: `Exchange rates for ${quote.currency} are unavailable right now; please try again shortly.`,
+      });
+    }
+    fxRateToEur = rate;
   }
   // A banned or suspended member cannot book, even with a token issued before the ban.
   if (input.guestId) {
@@ -522,26 +539,51 @@ export async function createBooking(input: {
     });
   }
 
-  // Card checks and the charge happen before the row is written, so a declined
-  // card never leaves a half-created booking behind.
-  const charge = input.card
-    ? authorizeCard(input.card, quote.total)
-    : { brand: "card" as const, last4: "0000" };
-  // A Stripe booking is only confirmed once the webhook reports the payment.
-  const paymentStatus = input.card ? "authorized" : "pending";
+  // Payment is Stripe-only: the payment row stays pending until the webhook
+  // reports the charge, and the booking is confirmed only from there.
+  const charge = { brand: "card" as const, last4: "0000" };
+  const paymentStatus = "pending";
 
   const id = newBookingId();
   const reference = bookingReference();
 
   const row = await transaction(async (client) => {
+    // Serialise bookings per listing, then re-check overlap inside the lock so
+    // two guests paying at the same moment can never get the same nights.
+    await query("SELECT pg_advisory_xact_lock(hashtext($1))", [`booking:${input.propertyId}`], {
+      client,
+      label: "bookings.lock",
+    });
+    const clash = await queryOne<{ id: string }>(
+      `SELECT id FROM booking
+        WHERE property_id = $1
+          AND status IN ('pending', 'confirmed', 'completed')
+          AND daterange(check_in, check_out, '[)') && daterange($2::date, $3::date, '[)')
+        LIMIT 1`,
+      [input.propertyId, input.from, input.to],
+      { client, label: "bookings.lockedConflict" },
+    );
+    if (clash) {
+      throw apiError("UNAVAILABLE", {
+        message: "These dates were just booked by someone else.",
+        details: { reasons: ["These dates were just booked by someone else."], blockedNights: [] },
+      });
+    }
     const inserted = await queryOne<{ id: string }>(
       `INSERT INTO booking (
          id, reference, property_id, guest_id, guest_name, guest_email, guest_phone, message,
-         check_in, check_out, guests, status, is_mobile_booking, currency,
-         nightly_usd, base_subtotal, subtotal, cleaning_fee, service_fee, taxes, total_usd)
+         check_in, check_out, guests, status, is_mobile_booking, currency, fx_rate_to_eur,
+         nightly_usd, base_subtotal, subtotal, cleaning_fee, service_fee, taxes, total_usd,
+         commission_rate)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
-               $9::date, $10::date, $11, $12::booking_status, $13, 'USD',
-               $14, $15, $16, $17, $18, $19, $20)
+               $9::date, $10::date, $11, $12::booking_status, $13, $21, $22,
+               $14, $15, $16, $17, $18, $19, $20,
+               COALESCE(
+                 (SELECT hc.commission_rate FROM host_commission hc
+                    JOIN property p ON p.host_id = hc.host_id
+                   WHERE p.id = $3),
+                 (SELECT commission_rate FROM platform_settings WHERE id = true),
+                 0))
        RETURNING id`,
       [
         id,
@@ -555,7 +597,8 @@ export async function createBooking(input: {
         input.from,
         input.to,
         input.guests,
-        stay.instant_book && input.card ? "confirmed" : "pending",
+        // Confirmation only ever comes from the Stripe webhook.
+        "pending",
         Boolean(input.isMobile),
         quote.nightly,
         quote.baseSubtotal,
@@ -564,6 +607,8 @@ export async function createBooking(input: {
         quote.serviceFee,
         quote.taxes,
         quote.total,
+        quote.currency,
+        fxRateToEur,
       ],
       { client, label: "bookings.insert" },
     );
@@ -598,8 +643,7 @@ export async function createBooking(input: {
   }, "bookings.create");
 
   const created = mapBooking(row);
-  // Stripe bookings are announced once the payment webhook reports the money.
-  if (input.card) void notifyBookingEvent(created.id, created.status === "confirmed" ? "confirmed" : "created");
+  void notifyBookingEvent(created.id, "created");
   return created;
 }
 

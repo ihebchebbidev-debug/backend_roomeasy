@@ -65,6 +65,7 @@ const draftSchema = z.object({
     .max(10, "A listing can hold at most 10 photos.")
     .default([]),
   pricing: z.object({
+    currency: z.enum(["EUR", "USD", "GBP", "CHF", "BRL"]).default("EUR"),
     nightlyUsd: z.number().min(10, "The nightly price starts at $10.").max(100_000),
     cleaningFeeUsd: z.number().min(0).max(100_000).default(0),
     minNights: z.number().int().min(1).max(365).default(1),

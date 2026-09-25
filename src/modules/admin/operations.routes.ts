@@ -416,7 +416,7 @@ adminOperationsRouter.get(
     const input = validateQuery(
       pagination.extend({
         status: z.enum(["open", "pending", "awaiting_reply", "escalated", "resolved", "closed", "all"]).default("open"),
-        category: z.enum(["booking", "payment", "listing", "account", "dispute", "other"]).optional(),
+        category: z.enum(["booking", "payment", "listing", "account", "dispute", "other", "review"]).optional(),
         assignedTo: z.string().uuid().optional(),
         search: z.string().trim().max(120).optional(),
       }),
@@ -727,8 +727,8 @@ adminOperationsRouter.get(
         columns: [
           { header: "Month", key: "month", width: 14, value: (r: (typeof reports.monthly)[number]) => r.month },
           { header: "Bookings", key: "bookings", width: 12, numFmt: "#,##0", value: (r: (typeof reports.monthly)[number]) => r.bookings },
-          { header: "Revenue (USD)", key: "revenue", width: 16, numFmt: "#,##0.00", value: (r: (typeof reports.monthly)[number]) => r.revenueUsd },
-          { header: "Commission (USD)", key: "commission", width: 18, numFmt: "#,##0.00", value: (r: (typeof reports.monthly)[number]) => r.commissionUsd },
+          { header: "Revenue", key: "revenue", width: 16, numFmt: "#,##0.00", value: (r: (typeof reports.monthly)[number]) => r.revenueUsd },
+          { header: "Commission", key: "commission", width: 18, numFmt: "#,##0.00", value: (r: (typeof reports.monthly)[number]) => r.commissionUsd },
         ],
         rows: reports.monthly,
       } as never,
@@ -737,7 +737,7 @@ adminOperationsRouter.get(
         columns: [
           { header: "Listing", key: "name", width: 32, value: (r: (typeof reports.topListings)[number]) => r.name },
           { header: "Bookings", key: "bookings", width: 12, numFmt: "#,##0", value: (r: (typeof reports.topListings)[number]) => r.bookings },
-          { header: "Revenue (USD)", key: "revenue", width: 16, numFmt: "#,##0.00", value: (r: (typeof reports.topListings)[number]) => r.revenueUsd },
+          { header: "Revenue", key: "revenue", width: 16, numFmt: "#,##0.00", value: (r: (typeof reports.topListings)[number]) => r.revenueUsd },
         ],
         rows: reports.topListings,
       } as never,
@@ -746,7 +746,7 @@ adminOperationsRouter.get(
         columns: [
           { header: "Host", key: "hostName", width: 28, value: (r: (typeof reports.topHosts)[number]) => r.hostName },
           { header: "Listings", key: "listings", width: 12, numFmt: "#,##0", value: (r: (typeof reports.topHosts)[number]) => r.listings },
-          { header: "Revenue (USD)", key: "revenue", width: 16, numFmt: "#,##0.00", value: (r: (typeof reports.topHosts)[number]) => r.revenueUsd },
+          { header: "Revenue", key: "revenue", width: 16, numFmt: "#,##0.00", value: (r: (typeof reports.topHosts)[number]) => r.revenueUsd },
         ],
         rows: reports.topHosts,
       } as never,
@@ -755,7 +755,7 @@ adminOperationsRouter.get(
         columns: [
           { header: "Reason", key: "reason", width: 24, value: (r: (typeof reports.cancellations)[number]) => r.reason },
           { header: "Count", key: "count", width: 12, numFmt: "#,##0", value: (r: (typeof reports.cancellations)[number]) => r.count },
-          { header: "Refunded (USD)", key: "refunded", width: 16, numFmt: "#,##0.00", value: (r: (typeof reports.cancellations)[number]) => r.refundedUsd },
+          { header: "Refunded", key: "refunded", width: 16, numFmt: "#,##0.00", value: (r: (typeof reports.cancellations)[number]) => r.refundedUsd },
         ],
         rows: reports.cancellations,
       } as never,
@@ -773,7 +773,7 @@ adminOperationsRouter.get(
         columns: [
           { header: "Destination", key: "destination", width: 28, value: (r: (typeof insights.topDestinations)[number]) => `${r.city}, ${r.country}` },
           { header: "Bookings", key: "bookings", width: 12, numFmt: "#,##0", value: (r: (typeof insights.topDestinations)[number]) => r.bookings },
-          { header: "Revenue (USD)", key: "revenue", width: 16, numFmt: "#,##0.00", value: (r: (typeof insights.topDestinations)[number]) => r.revenueUsd },
+          { header: "Revenue", key: "revenue", width: 16, numFmt: "#,##0.00", value: (r: (typeof insights.topDestinations)[number]) => r.revenueUsd },
           { header: "Nights", key: "nights", width: 12, numFmt: "#,##0", value: (r: (typeof insights.topDestinations)[number]) => r.nights },
         ],
         rows: insights.topDestinations,
@@ -839,10 +839,11 @@ adminOperationsRouter.get(
     );
     const rows = await accountingExport(input);
     const lines = [
-      "period,bookings,revenue_usd,commission_usd,host_net_usd,service_fee_usd,taxes_usd,cleaning_usd,refunded_usd,paid_usd",
+      "period,currency,bookings,revenue,commission,host_net,service_fee,taxes,cleaning,refunded,paid",
       ...rows.map((r) =>
         [
           r.period,
+          r.currency,
           r.bookings,
           r.revenueUsd,
           r.commissionUsd,
@@ -877,15 +878,16 @@ adminOperationsRouter.get(
         name: "Accounting",
         columns: [
           { header: "Period", key: "period", width: 14, value: (r: AccRow) => r.period },
+          { header: "Currency", key: "currency", width: 10, value: (r: AccRow) => r.currency },
           { header: "Bookings", key: "bookings", width: 12, numFmt: "#,##0", value: (r: AccRow) => r.bookings },
-          { header: "Revenue (USD)", key: "revenue", width: 16, numFmt: "#,##0.00", value: (r: AccRow) => r.revenueUsd },
-          { header: "Commission (USD)", key: "commission", width: 18, numFmt: "#,##0.00", value: (r: AccRow) => r.commissionUsd },
-          { header: "Host net (USD)", key: "hostNet", width: 16, numFmt: "#,##0.00", value: (r: AccRow) => r.hostNetUsd },
-          { header: "Service fee (USD)", key: "serviceFee", width: 18, numFmt: "#,##0.00", value: (r: AccRow) => r.serviceFeeUsd },
-          { header: "Taxes (USD)", key: "taxes", width: 14, numFmt: "#,##0.00", value: (r: AccRow) => r.taxesUsd },
-          { header: "Cleaning (USD)", key: "cleaning", width: 16, numFmt: "#,##0.00", value: (r: AccRow) => r.cleaningUsd },
-          { header: "Refunded (USD)", key: "refunded", width: 16, numFmt: "#,##0.00", value: (r: AccRow) => r.refundedUsd },
-          { header: "Paid (USD)", key: "paid", width: 14, numFmt: "#,##0.00", value: (r: AccRow) => r.paidUsd },
+          { header: "Revenue", key: "revenue", width: 16, numFmt: "#,##0.00", value: (r: AccRow) => r.revenueUsd },
+          { header: "Commission", key: "commission", width: 18, numFmt: "#,##0.00", value: (r: AccRow) => r.commissionUsd },
+          { header: "Host net", key: "hostNet", width: 16, numFmt: "#,##0.00", value: (r: AccRow) => r.hostNetUsd },
+          { header: "Service fee", key: "serviceFee", width: 18, numFmt: "#,##0.00", value: (r: AccRow) => r.serviceFeeUsd },
+          { header: "Taxes", key: "taxes", width: 14, numFmt: "#,##0.00", value: (r: AccRow) => r.taxesUsd },
+          { header: "Cleaning", key: "cleaning", width: 16, numFmt: "#,##0.00", value: (r: AccRow) => r.cleaningUsd },
+          { header: "Refunded", key: "refunded", width: 16, numFmt: "#,##0.00", value: (r: AccRow) => r.refundedUsd },
+          { header: "Paid", key: "paid", width: 14, numFmt: "#,##0.00", value: (r: AccRow) => r.paidUsd },
         ],
         rows,
       } as never,

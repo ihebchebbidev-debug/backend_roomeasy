@@ -18,6 +18,8 @@ export async function transferPayoutToHost(input: {
   payoutId: string;
   hostId: string | null;
   amountUsd: number;
+  /** Currency of the bookings in this payout; falls back to PAYMENT_CURRENCY. */
+  currency?: string | null;
 }): Promise<string | null> {
   if (!stripeEnabled()) return null;
   if (input.amountUsd <= 0) return null;
@@ -36,7 +38,7 @@ export async function transferPayoutToHost(input: {
   const transfer = await requireStripe().transfers.create(
     {
       amount: toMinorUnits(input.amountUsd),
-      currency: env.PAYMENT_CURRENCY.toLowerCase(),
+      currency: (input.currency?.trim() || env.PAYMENT_CURRENCY).toLowerCase(),
       destination: account.accountId,
       description: `Payout ${input.payoutId}`,
       metadata: { payoutId: input.payoutId, hostId: input.hostId },

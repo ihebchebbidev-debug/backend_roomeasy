@@ -3,7 +3,7 @@ import { query, queryOne } from "@/db/query.js";
 
 export type TicketStatus = "open" | "pending" | "awaiting_reply" | "escalated" | "resolved" | "closed";
 export type TicketPriority = "low" | "normal" | "high" | "urgent";
-export type TicketCategory = "booking" | "payment" | "listing" | "account" | "dispute" | "other";
+export type TicketCategory = "booking" | "payment" | "listing" | "account" | "dispute" | "other" | "review";
 
 type TicketRow = {
   id: string;

@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 
 import { apiError } from "@/core/errors.js";
+import { query, queryOne } from "@/db/query.js";
 import { asyncHandler, created, ok } from "@/core/http.js";
 import { validateBody, validateParams, validateQuery } from "@/core/validate.js";
 import { currentUser, requireRole } from "@/middleware/auth.js";
@@ -429,13 +430,50 @@ adminRouter.get(
   }),
 );
 
-/** Read-only traveller-host conversation shown on the reservation sheet. */
+/**
+ * Read-only traveller-host conversation. Private messages are only opened for
+ * support: the booking must have an open ticket or dispute, and every read is
+ * written to the admin history.
+ */
 adminRouter.get(
   "/bookings/:bookingId/conversation",
   requireCapability("bookings.read"),
   asyncHandler(async (req, res) => {
     const { bookingId } = validateParams(z.object({ bookingId: z.string().trim().min(1).max(140) }), req);
-    return ok(res, await bookingConversation(bookingId));
+    const ticket = await queryOne<{ id: string; reference: string; booking_id: string }>(
+      `SELECT t.id, t.reference, t.booking_id
+         FROM support_ticket t
+         JOIN booking b ON b.id = t.booking_id
+        WHERE (b.id = $1 OR b.reference = $1)
+          AND t.status NOT IN ('resolved', 'closed')
+        ORDER BY t.last_activity_at DESC
+        LIMIT 1`,
+      [bookingId],
+      { label: "admin.conversation.ticket" },
+    );
+    if (!ticket) {
+      throw apiError("FORBIDDEN", {
+        message: "Open a support ticket or dispute for this booking before reading its conversation.",
+      });
+    }
+    const conversation = await bookingConversation(bookingId);
+    const threadId = (conversation as { threadId?: string | null } | null)?.threadId ?? null;
+    if (threadId) {
+      await query(
+        "UPDATE support_ticket SET thread_id = COALESCE(thread_id, $2) WHERE id = $1",
+        [ticket.id, threadId],
+        { label: "admin.conversation.linkThread" },
+      );
+    }
+    await recordModeration({
+      adminId: currentUser(req).userId,
+      action: "conversation_viewed",
+      targetKind: "booking",
+      targetId: ticket.booking_id,
+      reason: `Support ticket ${ticket.reference}`,
+      metadata: { ticketId: ticket.id, threadId },
+    });
+    return ok(res, conversation);
   }),
 );
 

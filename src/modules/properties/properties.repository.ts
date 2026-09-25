@@ -17,6 +17,8 @@ export type PropertyDto = {
   baths: number;
   area: number;
   price: number;
+  /** Listing currency; `price` and `cleaningFee` are in it. */
+  currency: string;
   cleaningFee: number;
   minNights: number;
   cancellationPolicy: string;
@@ -36,6 +38,7 @@ export type PropertyDto = {
     id: string;
     status: string;
     approved: boolean;
+    currency: string;
     nightlyUsd: number;
     longStay: { enabled: boolean; threshold: number; discount: number };
     mobile: { enabled: boolean; discount: number };
@@ -84,6 +87,7 @@ type PropertyRow = {
   listing_status: string | null;
   listing_approved: boolean | null;
   nightly_usd: string | null;
+  currency: string | null;
   long_stay_enabled: boolean | null;
   long_stay_threshold: number | null;
   long_stay_discount: string | null;
@@ -117,6 +121,7 @@ export function mapProperty(row: PropertyRow): PropertyDto {
     baths: row.baths,
     area: row.area_sqm,
     price: Number(row.nightly_usd ?? row.base_price_usd),
+    currency: (row.currency ?? "EUR").trim(),
     cleaningFee: Number(row.cleaning_fee_usd),
     minNights: row.min_nights,
     cancellationPolicy: row.cancellation_policy,
@@ -145,6 +150,7 @@ export function mapProperty(row: PropertyRow): PropertyDto {
           id: row.listing_id,
           status: row.listing_status as string,
           approved: row.listing_approved === true,
+          currency: (row.currency ?? "EUR").trim(),
           nightlyUsd: Number(row.nightly_usd ?? row.base_price_usd),
           longStay: {
             enabled: row.long_stay_enabled === true,
@@ -169,7 +175,7 @@ const selectProperty = (localeParam: string) => `
          l.id      AS listing_id,
          l.status  AS listing_status,
          l.approved AS listing_approved,
-         l.nightly_usd, l.long_stay_enabled, l.long_stay_threshold, l.long_stay_discount,
+         l.nightly_usd, l.currency, l.long_stay_enabled, l.long_stay_threshold, l.long_stay_discount,
          l.mobile_enabled, l.mobile_discount,
          t.location_label,
          (SELECT array_agg(url ORDER BY position) FROM property_photo WHERE property_id = p.id) AS photos,
@@ -196,6 +202,14 @@ export type SearchFilters = {
   amenities?: string[];
   equipment?: string[];
   superhost?: boolean;
+  /** Only stays guests can book without waiting for host approval. */
+  instantBook?: boolean;
+  /** Only stays with the flexible (free cancellation) policy. */
+  freeCancellation?: boolean;
+  /** Planned stay length: hides stays whose minimum stay is longer. */
+  nights?: number;
+  /** Map area: south, west, north, east. */
+  bounds?: { south: number; west: number; north: number; east: number };
   from?: string;
   to?: string;
   sort?: "recommended" | "price-low" | "price-high" | "rating" | "distance" | "newest";
@@ -235,14 +249,32 @@ function buildWhere(filters: SearchFilters, startIndex: number): Where {
     );
   }
   if (filters.category && filters.category !== "all") add((i) => `p.category = $${i}::property_category`, filters.category);
-  if (filters.minPrice !== undefined) add((i) => `coalesce(l.nightly_usd, p.base_price_usd) >= $${i}`, filters.minPrice);
-  if (filters.maxPrice !== undefined) add((i) => `coalesce(l.nightly_usd, p.base_price_usd) <= $${i}`, filters.maxPrice);
+  if (filters.minPrice !== undefined) add((i) => `(coalesce(l.nightly_usd, p.base_price_usd) / coalesce((SELECT rate FROM exchange_rate xr WHERE xr.base_currency = 'EUR' AND xr.quote_currency = l.currency), 1)) >= $${i}`, filters.minPrice);
+  if (filters.maxPrice !== undefined) add((i) => `(coalesce(l.nightly_usd, p.base_price_usd) / coalesce((SELECT rate FROM exchange_rate xr WHERE xr.base_currency = 'EUR' AND xr.quote_currency = l.currency), 1)) <= $${i}`, filters.maxPrice);
   if (filters.rating !== undefined && filters.rating > 0) add((i) => `p.rating >= $${i}`, filters.rating);
   if (filters.beds) add((i) => `p.beds >= $${i}`, filters.beds);
   if (filters.baths) add((i) => `p.baths >= $${i}`, filters.baths);
   if (filters.rooms) add((i) => `p.rooms >= $${i}`, filters.rooms);
   if (filters.guests) add((i) => `p.guests >= $${i}`, filters.guests);
   if (filters.superhost) clauses.push(`coalesce(h.superhost, p.superhost) = true`);
+  if (filters.instantBook) clauses.push(`p.instant_book = true`);
+  if (filters.freeCancellation) clauses.push(`p.cancellation_policy = 'flexible'`);
+  if (filters.nights) add((i) => `p.min_nights <= $${i}`, filters.nights);
+  if (filters.bounds) {
+    const { west, east } = filters.bounds;
+    const south = Math.min(filters.bounds.south, filters.bounds.north);
+    const north = Math.max(filters.bounds.south, filters.bounds.north);
+    values.push(south, north, west, east);
+    const [s, n, w, e] = [4, 3, 2, 1].map((back) => startIndex + values.length - back);
+    clauses.push(`p.latitude BETWEEN $${s} AND $${n}`);
+    // A box crossing the date line wraps around longitude 180.
+    clauses.push(
+      west <= east
+        ? `p.longitude BETWEEN $${w} AND $${e}`
+        : `(p.longitude >= $${w} OR p.longitude <= $${e})`,
+    );
+  }
+
 
   if (filters.amenities?.length) {
     add(
@@ -287,9 +319,9 @@ function buildWhere(filters: SearchFilters, startIndex: number): Where {
 function orderBy(filters: SearchFilters): string {
   switch (filters.sort) {
     case "price-low":
-      return `coalesce(l.nightly_usd, p.base_price_usd) ASC, p.name ASC`;
+      return `(coalesce(l.nightly_usd, p.base_price_usd) / coalesce((SELECT rate FROM exchange_rate xr WHERE xr.base_currency = 'EUR' AND xr.quote_currency = l.currency), 1)) ASC, p.name ASC`;
     case "price-high":
-      return `coalesce(l.nightly_usd, p.base_price_usd) DESC, p.name ASC`;
+      return `(coalesce(l.nightly_usd, p.base_price_usd) / coalesce((SELECT rate FROM exchange_rate xr WHERE xr.base_currency = 'EUR' AND xr.quote_currency = l.currency), 1)) DESC, p.name ASC`;
     case "newest":
       return `p.created_at DESC, p.name ASC`;
     case "rating":

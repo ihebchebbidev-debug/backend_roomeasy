@@ -63,16 +63,16 @@ export async function adminOverview(): Promise<AdminOverview> {
             count(*) FILTER (WHERE status = 'confirmed') AS confirmed,
             count(*) FILTER (WHERE status = 'completed') AS completed,
             count(*) FILTER (WHERE status IN ('cancelled','declined')) AS cancelled,
-            coalesce(sum(total_usd) FILTER (WHERE status IN ('confirmed','completed')), 0) AS gross,
-            coalesce(sum(service_fee) FILTER (WHERE status IN ('confirmed','completed')), 0) AS commission
+            coalesce(sum(total_usd / nullif(fx_rate_to_eur, 0)) FILTER (WHERE status IN ('confirmed','completed')), 0) AS gross,
+            coalesce(sum(service_fee / nullif(fx_rate_to_eur, 0)) FILTER (WHERE status IN ('confirmed','completed')), 0) AS commission
        FROM booking`,
     [],
     { label: "admin.overview.bookings" },
   );
 
   const payouts = await queryOne<{ paid: string; pending: string }>(
-    `SELECT coalesce(sum(amount_usd) FILTER (WHERE status = 'paid'), 0) AS paid,
-            coalesce(sum(amount_usd) FILTER (WHERE status = 'scheduled'), 0) AS pending
+    `SELECT coalesce(sum(amount_usd / coalesce((SELECT rate FROM exchange_rate xr WHERE xr.base_currency = 'EUR' AND xr.quote_currency = payout.currency), 1)) FILTER (WHERE status = 'paid'), 0) AS paid,
+            coalesce(sum(amount_usd / coalesce((SELECT rate FROM exchange_rate xr WHERE xr.base_currency = 'EUR' AND xr.quote_currency = payout.currency), 1)) FILTER (WHERE status = 'scheduled'), 0) AS pending
        FROM payout`,
     [],
     { label: "admin.overview.payouts" },
@@ -612,9 +612,12 @@ export async function hostProfile(hostId: string): Promise<AdminHostProfile> {
     status: string;
     total_usd: string;
     service_fee: string;
+    currency: string;
+    fx_rate_to_eur: string;
   }>(
     `SELECT b.id, b.reference, b.property_id, p.name AS property_name, b.guest_name,
-            b.check_in, b.check_out, b.status::text AS status, b.total_usd, b.service_fee
+            b.check_in, b.check_out, b.status::text AS status, b.total_usd, b.service_fee,
+            b.currency, b.fx_rate_to_eur
        FROM booking b
        JOIN property p ON p.id = b.property_id
       WHERE p.host_id = $1
@@ -710,8 +713,8 @@ export async function hostProfile(hostId: string): Promise<AdminHostProfile> {
       bookings: bookingRows.length,
       completedBookings: bookingRows.filter((row) => row.status === "completed").length,
       cancelledBookings: bookingRows.filter((row) => row.status === "cancelled" || row.status === "declined").length,
-      grossRevenueUsd: Number(earning.reduce((sum, row) => sum + Number(row.total_usd), 0).toFixed(2)),
-      commissionUsd: Number(earning.reduce((sum, row) => sum + Number(row.service_fee), 0).toFixed(2)),
+      grossRevenueUsd: Number(earning.reduce((sum, row) => sum + Number(row.total_usd) / (Number(row.fx_rate_to_eur) || 1), 0).toFixed(2)),
+      commissionUsd: Number(earning.reduce((sum, row) => sum + Number(row.service_fee) / (Number(row.fx_rate_to_eur) || 1), 0).toFixed(2)),
       averageRating: visibleReviews.length ? Number((ratingSum / visibleReviews.length).toFixed(2)) : 0,
       reviews: reviewRows.length,
     },
@@ -726,6 +729,7 @@ export async function hostProfile(hostId: string): Promise<AdminHostProfile> {
       checkOut: row.check_out.toISOString().slice(0, 10),
       status: row.status,
       totalUsd: Number(row.total_usd),
+      currency: row.currency.trim(),
     })),
     reviews: reviewRows.map((row) => ({
       id: row.id,
@@ -768,6 +772,8 @@ export type PayoutDto = {
   hostName: string;
   amountUsd: number;
   commissionUsd: number;
+  /** Currency of amountUsd/commissionUsd (the bookings' listing currency). */
+  currency: string;
   status: "paid" | "scheduled";
   payoutDate: string;
   bookings: string[];
@@ -783,6 +789,7 @@ type PayoutRow = {
   host_name: string;
   amount_usd: string;
   commission_usd: string;
+  currency: string;
   status: "paid" | "scheduled";
   payout_date: Date;
   bookings: string[] | null;
@@ -798,6 +805,7 @@ function mapPayout(row: PayoutRow): PayoutDto {
     hostName: row.host_name,
     amountUsd: Number(row.amount_usd),
     commissionUsd: Number(row.commission_usd),
+    currency: (row.currency ?? "EUR").trim(),
     status: row.status,
     payoutDate: row.payout_date.toISOString().slice(0, 10),
     bookings: row.bookings ?? [],
@@ -808,7 +816,7 @@ function mapPayout(row: PayoutRow): PayoutDto {
 }
 
 const PAYOUT_SELECT = `
-  SELECT p.id, p.host_id, p.host_name, p.amount_usd, p.commission_usd, p.status::text AS status,
+  SELECT p.id, p.host_id, p.host_name, p.amount_usd, p.commission_usd, p.currency, p.status::text AS status,
          p.payout_date, p.created_at, p.stripe_transfer_id, p.paid_at,
          (SELECT array_agg(i.booking_id ORDER BY i.booking_id) FROM payout_item i WHERE i.payout_id = p.id) AS bookings
     FROM payout p`;
@@ -818,7 +826,7 @@ export async function listPayouts(options: {
   status?: "paid" | "scheduled";
   limit: number;
   offset: number;
-}): Promise<{ items: PayoutDto[]; total: number; totalUsd: number }> {
+}): Promise<{ items: PayoutDto[]; total: number; totalUsd: number; totalsByCurrency: Record<string, number> }> {
   const values: unknown[] = [];
   const where: string[] = [];
 
@@ -848,10 +856,19 @@ export async function listPayouts(options: {
     { label: "admin.countPayouts" },
   );
 
+  const byCurrency = await query<{ currency: string; sum: string }>(
+    `SELECT p.currency, coalesce(sum(p.amount_usd), 0) AS sum FROM payout p ${clause} GROUP BY p.currency`,
+    countValues,
+    { label: "admin.sumPayoutsByCurrency" },
+  );
+  const totalsByCurrency = Object.fromEntries(byCurrency.map((r) => [r.currency.trim(), Number(r.sum)]));
+
   return {
     items: rows.map(mapPayout),
     total: Number(totals?.total ?? 0),
+    // Only meaningful when every payout shares one currency; use totalsByCurrency otherwise.
     totalUsd: Number(totals?.sum ?? 0),
+    totalsByCurrency,
   };
 }
 
@@ -871,8 +888,8 @@ export async function createPayoutForHost(hostId: string, payoutDate?: string): 
       throw apiError("NOT_FOUND", { message: "That host does not exist.", details: { hostId } });
     }
 
-    const eligible = await query<{ id: string; total_usd: string; service_fee_usd: string }>(
-      `SELECT b.id, b.total_usd, b.service_fee AS service_fee_usd
+    const eligibleAll = await query<{ id: string; total_usd: string; service_fee_usd: string; currency: string }>(
+      `SELECT b.id, b.total_usd, b.service_fee AS service_fee_usd, b.currency
          FROM booking b
          JOIN property p ON p.id = b.property_id
         WHERE p.host_id = $1
@@ -890,21 +907,27 @@ export async function createPayoutForHost(hostId: string, payoutDate?: string): 
       { client, label: "admin.payoutEligible" },
     );
 
-    if (!eligible.length) {
+    if (!eligibleAll.length) {
       throw apiError("PAYOUT_NOT_READY", {
         message: "This host has no completed stay waiting to be paid out.",
         details: { hostId },
       });
     }
 
+    // A payout carries one currency. When a host has stays in several
+    // currencies, the oldest currency is paid now and the rest stay eligible
+    // for the next payout (the admin simply creates another one).
+    const currency = eligibleAll[0]!.currency.trim();
+    const eligible = eligibleAll.filter((row) => row.currency.trim() === currency);
+
     const commission = eligible.reduce((sum, row) => sum + Number(row.service_fee_usd), 0);
     const amount = eligible.reduce((sum, row) => sum + Number(row.total_usd) - Number(row.service_fee_usd), 0);
     const id = newPayoutId();
 
     await query(
-      `INSERT INTO payout (id, host_id, host_name, amount_usd, commission_usd, status, payout_date)
-       VALUES ($1, $2, $3, $4, $5, 'scheduled', coalesce($6::date, CURRENT_DATE))`,
-      [id, hostId, host.display_name, amount.toFixed(2), commission.toFixed(2), payoutDate ?? null],
+      `INSERT INTO payout (id, host_id, host_name, amount_usd, commission_usd, currency, status, payout_date)
+       VALUES ($1, $2, $3, $4, $5, $6, 'scheduled', coalesce($7::date, CURRENT_DATE))`,
+      [id, hostId, host.display_name, amount.toFixed(2), commission.toFixed(2), currency, payoutDate ?? null],
       { client, label: "admin.createPayout" },
     );
 
@@ -942,6 +965,7 @@ export async function markPayoutPaid(payoutId: string): Promise<PayoutDto> {
     payoutId,
     hostId: current.host_id,
     amountUsd: Number(current.amount_usd),
+    currency: current.currency,
   });
 
   await query(
@@ -972,8 +996,8 @@ export async function adminReports(months = 12): Promise<AdminReports> {
   const monthly = await query<{ month: string; bookings: string; revenue: string; commission: string }>(
     `SELECT to_char(date_trunc('month', b.created_at), 'YYYY-MM') AS month,
             count(*) AS bookings,
-            coalesce(sum(b.total_usd) FILTER (WHERE b.status IN ('confirmed','completed')), 0) AS revenue,
-            coalesce(sum(b.service_fee) FILTER (WHERE b.status IN ('confirmed','completed')), 0) AS commission
+            coalesce(sum(b.total_usd / nullif(b.fx_rate_to_eur, 0)) FILTER (WHERE b.status IN ('confirmed','completed')), 0) AS revenue,
+            coalesce(sum(b.service_fee / nullif(b.fx_rate_to_eur, 0)) FILTER (WHERE b.status IN ('confirmed','completed')), 0) AS commission
        FROM booking b
       WHERE b.created_at >= date_trunc('month', now()) - make_interval(months => $1)
       GROUP BY 1 ORDER BY 1`,
@@ -989,7 +1013,7 @@ export async function adminReports(months = 12): Promise<AdminReports> {
     rating: string | null;
   }>(
     `SELECT p.id AS property_id, p.name, count(b.id) AS bookings,
-            coalesce(sum(b.total_usd) FILTER (WHERE b.status IN ('confirmed','completed')), 0) AS revenue,
+            coalesce(sum(b.total_usd / nullif(b.fx_rate_to_eur, 0)) FILTER (WHERE b.status IN ('confirmed','completed')), 0) AS revenue,
             p.rating
        FROM property p
        LEFT JOIN booking b ON b.property_id = p.id
@@ -1003,7 +1027,7 @@ export async function adminReports(months = 12): Promise<AdminReports> {
   const topHosts = await query<{ host_id: string; host_name: string; listings: string; revenue: string }>(
     `SELECT u.id AS host_id, coalesce(hp.display_name, u.full_name) AS host_name,
             count(DISTINCT p.id) AS listings,
-            coalesce(sum(b.total_usd) FILTER (WHERE b.status IN ('confirmed','completed')), 0) AS revenue
+            coalesce(sum(b.total_usd / nullif(b.fx_rate_to_eur, 0)) FILTER (WHERE b.status IN ('confirmed','completed')), 0) AS revenue
        FROM app_user u
        JOIN property p ON p.host_id = u.id
        LEFT JOIN host_profile hp ON hp.user_id = u.id
@@ -1017,8 +1041,9 @@ export async function adminReports(months = 12): Promise<AdminReports> {
 
   const cancellations = await query<{ reason: string | null; count: string; refunded: string }>(
     `SELECT coalesce(nullif(trim(c.reason), ''), 'Not given') AS reason,
-            count(*) AS count, coalesce(sum(c.refund_usd), 0) AS refunded
+            count(*) AS count, coalesce(sum(c.refund_usd / nullif(bk.fx_rate_to_eur, 0)), 0) AS refunded
        FROM booking_cancellation c
+       JOIN booking bk ON bk.id = c.booking_id
       GROUP BY 1 ORDER BY count DESC LIMIT 10`,
     [],
     { label: "admin.reports.cancellations" },
@@ -1118,7 +1143,7 @@ export async function adminInsights(months = 12): Promise<AdminInsights> {
   );
 
   const basket = await queryOne<{ average: string | null; bookings: string }>(
-    `SELECT avg(total_usd) AS average, count(*) AS bookings
+    `SELECT avg(total_usd / nullif(fx_rate_to_eur, 0)) AS average, count(*) AS bookings
        FROM booking
       WHERE status IN ('confirmed','completed')
         AND created_at >= date_trunc('month', now()) - make_interval(months => $1::int - 1)`,
@@ -1148,7 +1173,7 @@ export async function adminInsights(months = 12): Promise<AdminInsights> {
     nights: string;
   }>(
     `SELECT p.city, p.country, count(b.id) AS bookings,
-            coalesce(sum(b.total_usd), 0) AS revenue,
+            coalesce(sum(b.total_usd / nullif(b.fx_rate_to_eur, 0)), 0) AS revenue,
             coalesce(sum(b.nights), 0)::text AS nights
        FROM booking b
        JOIN property p ON p.id = b.property_id
@@ -1165,7 +1190,7 @@ export async function adminInsights(months = 12): Promise<AdminInsights> {
     `SELECT extract(month FROM check_in)::int::text AS month,
             count(*) AS bookings,
             coalesce(sum(nights), 0)::text AS nights,
-            coalesce(sum(total_usd), 0) AS revenue
+            coalesce(sum(total_usd / nullif(fx_rate_to_eur, 0)), 0) AS revenue
        FROM booking
       WHERE status IN ('confirmed','completed')
       GROUP BY 1 ORDER BY 1`,

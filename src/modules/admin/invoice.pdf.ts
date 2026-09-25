@@ -7,13 +7,15 @@ import type { InvoiceData } from "@/modules/admin/finance.repository.js";
  * Renders one booking's invoice as a PDF, in the same shape the JSON
  * `bookingInvoice()` endpoint already exposes: company header, invoice
  * number, dates, guest, host, listing, nights, line items, service fee,
- * taxes, total (EUR) and payment status. Used by the admin finance screen
+ * taxes, total (booking currency) and payment status. Used by the admin finance screen
  * and by the guest/host booking pages, both gated by an ownership check
  * upstream of this renderer.
  */
 
+// Set per invoice: every amount is in the booking's (listing's) currency.
+let invoiceCurrency = "EUR";
 const eur = (value: number) =>
-  new Intl.NumberFormat("en-IE", { style: "currency", currency: "EUR" }).format(value);
+  new Intl.NumberFormat("en-IE", { style: "currency", currency: invoiceCurrency }).format(value);
 
 const longDate = (value: string) =>
   new Date(value).toLocaleDateString("en-GB", { day: "2-digit", month: "long", year: "numeric" });
@@ -29,6 +31,7 @@ const PAYMENT_STATUS_LABEL: Record<string, string> = {
 
 export function renderInvoicePdf(invoice: InvoiceData, res: Response): void {
   const { booking } = invoice;
+  invoiceCurrency = booking.currency || "EUR";
   const invoiceNumber = `INV-${booking.reference}`;
 
   res.setHeader("Content-Type", "application/pdf");

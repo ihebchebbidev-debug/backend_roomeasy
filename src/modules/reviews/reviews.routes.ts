@@ -15,6 +15,9 @@ import {
   updateReview,
 } from "@/modules/reviews/reviews.repository.js";
 import { apiError } from "@/core/errors.js";
+import { queryOne } from "@/db/query.js";
+import { rateLimit } from "@/middleware/rateLimit.js";
+import { createTicket } from "@/modules/admin/support.repository.js";
 
 export const reviewsRouter = Router();
 
@@ -109,5 +112,45 @@ reviewsRouter.post(
     });
     req.log.info({ reviewId }, "review replied");
     return ok(res, review);
+  }),
+);
+
+/**
+ * Guests and hosts can report a review (abusive, false, off-topic…). The
+ * report lands in the support desk as a "review" ticket so the moderation
+ * team can hide or keep it from the admin reviews screen.
+ */
+reviewsRouter.post(
+  "/:reviewId/report",
+  rateLimit({ windowMs: 60 * 60_000, max: 10, name: "review-report" }),
+  asyncHandler(async (req, res) => {
+    const { reviewId } = validateParams(reviewParams, req);
+    const body = validateBody(
+      z.object({
+        reason: z.enum(["abusive", "false", "off_topic", "personal_data", "other"]),
+        details: z.string().trim().max(1000).optional(),
+      }),
+      req,
+    );
+    const review = await findReview(reviewId, { includeHidden: false });
+    if (!review) throw apiError("NOT_FOUND", { message: "This review no longer exists." });
+    const user = currentUser(req);
+    const who = await queryOne<{ full_name: string; is_host: boolean }>(
+      `SELECT u.full_name, EXISTS (SELECT 1 FROM host_profile h WHERE h.user_id = u.id) AS is_host
+         FROM app_user u WHERE u.id = $1`,
+      [user.userId],
+      { label: "reviews.report.user" },
+    );
+    const ticket = await createTicket({
+      subject: `Review reported: ${reviewId}`,
+      category: "review",
+      openedBy: user.userId,
+      openedByName: who?.full_name || user.email,
+      openedByRole: who?.is_host ? "host" : "guest",
+      bookingId: review.bookingId ?? null,
+      body: `Reason: ${body.reason}\nReview: ${reviewId}${body.details ? `\n\n${body.details}` : ""}`,
+    });
+    req.log.info({ reviewId }, "review reported");
+    return created(res, { ticketReference: (ticket as { reference?: string } | null)?.reference ?? null });
   }),
 );

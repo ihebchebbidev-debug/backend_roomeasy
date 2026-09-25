@@ -31,7 +31,8 @@ export type ModerationAction =
   | "content_updated"
   | "translation_updated"
   | "two_factor_reset"
-  | "identity_synced";
+  | "identity_synced"
+  | "conversation_viewed";
 
 /** Append-only audit trail for every privileged action. */
 export async function recordModeration(entry: {

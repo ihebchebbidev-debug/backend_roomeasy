@@ -23,6 +23,9 @@ import {
   submitIdentityDocument,
   resetPasswordForDev,
   resetPasswordWithToken,
+  createEmailVerificationToken,
+  createEmailVerificationTokenForEmail,
+  verifyEmailWithToken,
   removeAvatar,
   saveAvatar,
   trustBadgesFor,
@@ -116,6 +119,29 @@ accountsRouter.post(
       roles: body.asHost ? ["guest", "host"] : ["guest"],
     });
     req.log.info({ userId: account.id, roles: account.roles }, "account created");
+
+    const issued = await createEmailVerificationToken(account.id);
+    if (issued) {
+      const link = `${env.PUBLIC_APP_URL ?? ""}/verify-email?token=${encodeURIComponent(issued.token)}`;
+      await queueNotification({
+        recipientId: account.id,
+        recipientEmail: account.email,
+        template: "password_reset",
+        subject: `Confirm your ${env.APP_NAME} email address`,
+        body: [
+          `Welcome to ${env.APP_NAME}, ${account.fullName}!`,
+          "",
+          `Please confirm your email address: ${link}`,
+          "",
+          "The link works once and expires in 48 hours. You can still use your account while it is unverified.",
+        ].join("\n"),
+        payload: { expiresAt: issued.expiresAt },
+      });
+      void dispatchQueuedEmails(5).catch((error) =>
+        req.log.error({ err: error }, "verification email could not be sent immediately"),
+      );
+    }
+
     return created(res, session(account));
   }),
 );
@@ -126,9 +152,10 @@ accountsRouter.post(
   asyncHandler(async (req, res) => {
     const body = validateBody(loginSchema, req);
     const account = await verifyCredentials(body.email, body.password);
-    // Administrators sign in with their password only; second factor is not asked of them.
-    const isAdmin = (account.roles as string[] | undefined)?.includes("admin") ?? false;
-    if (!isAdmin) await assertSecondFactor(account.id, body.otp);
+    // assertSecondFactor is a no-op for accounts that never enabled two-step
+    // sign-in, and required (with a valid code) for everyone who has — admins
+    // included, since they hold the most sensitive privileges on the platform.
+    await assertSecondFactor(account.id, body.otp);
     req.log.info({ userId: account.id }, "sign-in succeeded");
     return ok(res, session(account));
   }),
@@ -342,6 +369,44 @@ accountsRouter.post(
     const body = validateBody(z.object({ token: z.string().min(10, "This reset request is not valid."), password: passwordField }), req);
     await resetPasswordWithToken(body.token, body.password);
     return ok(res, { message: "Your password has been changed. Sign in with the new password." });
+  }),
+);
+
+accountsRouter.post(
+  "/verify-email",
+  rateLimit({ windowMs: 15 * 60_000, max: 20, name: "verify-email" }),
+  asyncHandler(async (req, res) => {
+    const body = validateBody(z.object({ token: z.string().min(10, "This verification link is not valid.") }), req);
+    await verifyEmailWithToken(body.token);
+    return ok(res, { message: "Your email address has been confirmed." });
+  }),
+);
+
+accountsRouter.post(
+  "/resend-verification",
+  rateLimit({ windowMs: 15 * 60_000, max: 5, name: "resend-verification" }),
+  asyncHandler(async (req, res) => {
+    const body = validateBody(z.object({ email: emailField }), req);
+    const issued = await createEmailVerificationTokenForEmail(body.email);
+    if (issued) {
+      const link = `${env.PUBLIC_APP_URL ?? ""}/verify-email?token=${encodeURIComponent(issued.token)}`;
+      await queueNotification({
+        recipientId: issued.userId,
+        recipientEmail: body.email,
+        template: "password_reset",
+        subject: `Confirm your ${env.APP_NAME} email address`,
+        body: [
+          `Please confirm your email address: ${link}`,
+          "",
+          "The link works once and expires in 48 hours.",
+        ].join("\n"),
+        payload: { expiresAt: issued.expiresAt },
+      });
+      void dispatchQueuedEmails(5).catch((error) =>
+        req.log.error({ err: error }, "verification email could not be sent immediately"),
+      );
+    }
+    return ok(res, { message: "If that address needs confirming, a new link is on its way." });
   }),
 );
 

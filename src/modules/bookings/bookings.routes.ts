@@ -76,16 +76,7 @@ bookingsRouter.post(
             email: z.string().trim().email("Enter a valid email address.").max(160).optional(),
             phone: z.string().trim().max(40).optional(),
           }),
-          /** Omitted when the guest pays with Stripe: the card is collected by Stripe itself. */
-          card: z
-            .object({
-              number: z.string().trim().min(12, "Enter the full card number.").max(24),
-              name: z.string().trim().min(2, "Enter the name printed on the card.").max(120),
-              expiry: z.string().trim().regex(/^\d{2}\/\d{2}$/, "Use the MM/YY format."),
-              cvc: z.string().trim().regex(/^\d{3,4}$/, "The security code is 3 or 4 digits."),
-            })
-            .optional(),
-          paymentMethod: z.enum(["card", "stripe"]).optional(),
+          paymentMethod: z.enum(["stripe"]).optional(),
         })
         .refine((value) => value.to > value.from, { message: "Check-out must be after check-in.", path: ["to"] }),
       req,
@@ -99,7 +90,6 @@ bookingsRouter.post(
       guests: body.guests,
       guest: body.guest,
       message: body.message ?? null,
-      ...(body.paymentMethod === "stripe" || !body.card ? {} : { card: body.card }),
       isMobile: body.isMobile ?? false,
       guestId: user.userId,
     });

@@ -19,6 +19,13 @@ export const accountTables: TableDef[] = [
         note: "Added by the backend: db/schema.sql has no credential column, sign-in needs one.",
       },
       { name: "verified", type: "boolean", notNull: true, default: "false" },
+      {
+        name: "email_verified",
+        type: "boolean",
+        notNull: true,
+        default: "false",
+        note: "Separate from `verified` (identity check): confirms the signup address was proven via the emailed link.",
+      },
       { name: "suspended", type: "boolean", notNull: true, default: "false" },
       { name: "suspended_reason", type: "text", note: "Shown to admins in the users tab." },
       {
@@ -31,7 +38,7 @@ export const accountTables: TableDef[] = [
       { name: "banned_at", type: "timestamptz" },
       { name: "avatar_url", type: "text" },
       { name: "locale", type: "text", notNull: true, default: "'en'" },
-      { name: "currency", type: "text", notNull: true, default: "'USD'" },
+      { name: "currency", type: "text", notNull: true, default: "'EUR'" },
       { name: "two_factor_enabled", type: "boolean", notNull: true, default: "false" },
       { name: "two_factor_secret", type: "text", note: "Base32 TOTP secret, set once enrolment is confirmed." },
       { name: "two_factor_pending_secret", type: "text", note: "Secret awaiting its first valid code." },
@@ -92,6 +99,21 @@ export const accountTables: TableDef[] = [
       { name: "created_at", type: "timestamptz", notNull: true, default: "now()" },
     ],
     indexes: [{ name: "password_reset_user_idx", on: "user_id, created_at DESC" }],
+  },
+
+  {
+    name: "email_verification_token",
+    comment: "Backend addition: powers the signup email confirmation link.",
+    primaryKey: ["id"],
+    columns: [
+      { name: "id", type: "uuid", notNull: true, default: "gen_random_uuid()" },
+      { name: "user_id", type: "uuid", notNull: true, references: "app_user(id) ON DELETE CASCADE" },
+      { name: "token_hash", type: "text", notNull: true, unique: true },
+      { name: "expires_at", type: "timestamptz", notNull: true },
+      { name: "used_at", type: "timestamptz" },
+      { name: "created_at", type: "timestamptz", notNull: true, default: "now()" },
+    ],
+    indexes: [{ name: "email_verification_user_idx", on: "user_id, created_at DESC" }],
   },
 
   {

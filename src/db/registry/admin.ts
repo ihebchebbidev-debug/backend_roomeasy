@@ -51,6 +51,7 @@ export const adminTables: TableDef[] = [
       { name: "assigned_to", type: "uuid", references: "app_user(id) ON DELETE SET NULL" },
       { name: "resolution", type: "text" },
       { name: "closed_at", type: "timestamptz" },
+      { name: "thread_id", type: "text", references: "message_thread(id) ON DELETE SET NULL" },
       { name: "last_activity_at", type: "timestamptz", notNull: true, default: "now()" },
       { name: "created_at", type: "timestamptz", notNull: true, default: "now()" },
       { name: "updated_at", type: "timestamptz", notNull: true, default: "now()" },

@@ -17,7 +17,8 @@ export type DiscountKind = "longStay" | "mobile" | "lastMinute";
 export type PriceLine = { id: DiscountKind; percent: number; amount: number };
 
 export type PriceBreakdown = {
-  currency: "EUR";
+  /** The listing's own currency; every amount below is in it. */
+  currency: string;
   nightly: number;
   nights: number;
   baseSubtotal: number;
@@ -34,6 +35,8 @@ export type PriceBreakdown = {
 };
 
 export type QuoteContext = {
+  /** Listing currency (defaults to EUR). */
+  currency?: string;
   from: string;
   to: string;
   nightlyUsd: number;
@@ -127,7 +130,7 @@ export function computeQuote(context: QuoteContext): PriceBreakdown {
   const taxes = round(subtotal * context.taxRate);
 
   return {
-    currency: "EUR",
+    currency: context.currency ?? "EUR",
     nightly: context.nightlyUsd,
     nights: nights.length,
     baseSubtotal: chargedBase,
@@ -172,7 +175,7 @@ function computeSmartQuote(
   const serviceFee = round(subtotal * context.serviceFeeRate);
   const taxes = round(subtotal * context.taxRate);
   return {
-    currency: "EUR",
+    currency: context.currency ?? "EUR",
     nightly: nights.length ? round(chargedBase / nights.length) : context.nightlyUsd,
     nights: nights.length,
     baseSubtotal: chargedBase,

@@ -5,7 +5,7 @@ import { asyncHandler, ok } from "@/core/http.js";
 import { validateBody } from "@/core/validate.js";
 import { currentUser, requireRole } from "@/middleware/auth.js";
 import { recordModeration } from "@/modules/admin/moderation.repository.js";
-import { getPlatformSettings, updatePlatformSettings } from "@/modules/settings/settings.repository.js";
+import { getPlatformSettings, updatePlatformSettings, SOCIAL_KEYS, type SocialKey } from "@/modules/settings/settings.repository.js";
 import {
   INTEGRATION_KEYS,
   integrationView,
@@ -85,6 +85,17 @@ const settingsPatchSchema = z
     weekend: z.number().min(0).max(90).optional(),
     longStay: z.number().min(0).max(90).optional(),
     lastMinute: z.number().min(0).max(90).optional(),
+    socialLinks: z
+      .object(
+        Object.fromEntries(
+          SOCIAL_KEYS.map((k) => [
+            k,
+            z.string().trim().max(500).refine((v) => v === "" || /^https?:\/\/\S+$/i.test(v), "Use a full link starting with https://").optional(),
+          ]),
+        ) as Record<SocialKey, z.ZodTypeAny>,
+      )
+      .strict()
+      .optional(),
   })
   .refine((value) => Object.keys(value).length > 0, "Send at least one setting to change.");
 
@@ -97,6 +108,7 @@ settingsRouter.get(
       serviceFeeRate: settings.serviceFeeRate,
       taxRate: settings.taxRate,
       rateRules: settings.rateRules,
+      socialLinks: settings.socialLinks,
       updatedAt: settings.updatedAt,
     });
   }),

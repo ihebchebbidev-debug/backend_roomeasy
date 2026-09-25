@@ -21,6 +21,8 @@ export type FinanceRow = {
   hostId: string;
   hostName: string;
   propertyName: string;
+  /** Booking (listing) currency; every amount on this row is in it. */
+  currency: string;
   totalUsd: number;
   commissionRate: number;
   commissionUsd: number;
@@ -89,6 +91,7 @@ type LedgerDbRow = {
   host_id: string;
   host_name: string;
   property_name: string;
+  currency: string;
   total_usd: string;
   commission_rate: string;
   payment_status: string | null;
@@ -115,6 +118,7 @@ function toRow(row: LedgerDbRow): FinanceRow {
     hostId: row.host_id,
     hostName: row.host_name,
     propertyName: row.property_name,
+    currency: (row.currency ?? "EUR").trim(),
     totalUsd: total,
     commissionRate: rate,
     commissionUsd: commission,
@@ -140,8 +144,8 @@ export async function financeLedger(filters: LedgerFilters): Promise<{ rows: Fin
   const listParams = [...params, filters.limit, filters.offset];
   const rows = await query<LedgerDbRow>(
     `SELECT b.id, b.reference, b.created_at, b.check_in, b.check_out, b.status::text AS status,
-            b.guest_name, p.host_id, hu.full_name AS host_name, p.name AS property_name, b.total_usd,
-            COALESCE(hc.commission_rate, ps.commission_rate) AS commission_rate,
+            b.guest_name, p.host_id, hu.full_name AS host_name, p.name AS property_name, b.currency, b.total_usd,
+            COALESCE(b.commission_rate, hc.commission_rate, ps.commission_rate) AS commission_rate,
             pay.status AS payment_status, pay.method AS payment_method,
             pay.reference AS payment_reference, pay.refunded_usd
        ${BOOKING_BASE}
@@ -159,6 +163,8 @@ export type CommissionReportRow = {
   hostId: string;
   hostName: string;
   hostEmail: string | null;
+  /** A host with stays in several currencies gets one row per currency. */
+  currency: string;
   bookings: number;
   revenueUsd: number;
   commissionUsd: number;
@@ -177,20 +183,23 @@ export async function commissionReport(range: { from?: string; to?: string }): P
     host_id: string;
     host_name: string;
     host_email: string | null;
+    currency: string;
     commission_rate: string;
+    commission_usd: string;
     bookings: string;
     revenue_usd: string;
     paid_usd: string;
   }>(
-    `SELECT p.host_id, hu.full_name AS host_name, hu.email AS host_email,
-            COALESCE(hc.commission_rate, ps.commission_rate) AS commission_rate,
+    `SELECT p.host_id, hu.full_name AS host_name, hu.email AS host_email, b.currency,
+            ROUND(COALESCE(SUM(b.total_usd * COALESCE(b.commission_rate, hc.commission_rate, ps.commission_rate)) / NULLIF(SUM(b.total_usd), 0), 0), 2) AS commission_rate,
+            COALESCE(SUM(ROUND(b.total_usd * COALESCE(b.commission_rate, hc.commission_rate, ps.commission_rate) / 100, 2)), 0) AS commission_usd,
             COUNT(*)::text AS bookings,
             COALESCE(SUM(b.total_usd), 0) AS revenue_usd,
             COALESCE(SUM(CASE WHEN pay.status = 'paid' THEN b.total_usd ELSE 0 END), 0) AS paid_usd
        ${BOOKING_BASE}
        ${where}
-      GROUP BY p.host_id, hu.full_name, hu.email, COALESCE(hc.commission_rate, ps.commission_rate)
-      ORDER BY revenue_usd DESC`,
+      GROUP BY p.host_id, hu.full_name, hu.email, b.currency
+      ORDER BY b.currency, revenue_usd DESC`,
     params,
     { label: "finance.commission-report" },
   );
@@ -198,12 +207,13 @@ export async function commissionReport(range: { from?: string; to?: string }): P
   return rows.map((row) => {
     const revenue = Number(row.revenue_usd);
     const rate = Number(row.commission_rate);
-    const commission = Math.round(revenue * rate) / 100;
+    const commission = Number(row.commission_usd);
     const paid = Number(row.paid_usd);
     return {
       hostId: row.host_id,
       hostName: row.host_name,
       hostEmail: row.host_email,
+      currency: row.currency.trim(),
       bookings: Number(row.bookings),
       revenueUsd: revenue,
       commissionUsd: commission,
@@ -219,6 +229,8 @@ export type AccountingPeriod = "month" | "quarter" | "year";
 
 export type AccountingRow = {
   period: string;
+  /** Totals are never mixed across currencies: one row per period and currency. */
+  currency: string;
   bookings: number;
   revenueUsd: number;
   commissionUsd: number;
@@ -247,6 +259,7 @@ export async function accountingExport(input: {
 
   const rows = await query<{
     period: string;
+    currency: string;
     bookings: string;
     revenue_usd: string;
     commission_usd: string;
@@ -256,10 +269,10 @@ export async function accountingExport(input: {
     refunded_usd: string;
     paid_usd: string;
   }>(
-    `SELECT ${bucket} AS period,
+    `SELECT ${bucket} AS period, b.currency,
             COUNT(*)::text AS bookings,
             COALESCE(SUM(b.total_usd), 0) AS revenue_usd,
-            COALESCE(SUM(b.total_usd * COALESCE(hc.commission_rate, ps.commission_rate) / 100), 0) AS commission_usd,
+            COALESCE(SUM(b.total_usd * COALESCE(b.commission_rate, hc.commission_rate, ps.commission_rate) / 100), 0) AS commission_usd,
             COALESCE(SUM(b.service_fee), 0) AS service_fee_usd,
             COALESCE(SUM(b.taxes), 0) AS taxes_usd,
             COALESCE(SUM(b.cleaning_fee), 0) AS cleaning_usd,
@@ -267,8 +280,8 @@ export async function accountingExport(input: {
             COALESCE(SUM(CASE WHEN pay.status = 'paid' THEN b.total_usd ELSE 0 END), 0) AS paid_usd
        ${BOOKING_BASE}
        ${where}
-      GROUP BY period
-      ORDER BY period`,
+      GROUP BY period, b.currency
+      ORDER BY period, b.currency`,
     params,
     { label: "finance.accounting" },
   );
@@ -278,6 +291,7 @@ export async function accountingExport(input: {
     const commission = Math.round(Number(row.commission_usd) * 100) / 100;
     return {
       period: row.period,
+      currency: row.currency.trim(),
       bookings: Number(row.bookings),
       revenueUsd: revenue,
       commissionUsd: commission,
@@ -328,8 +342,8 @@ export async function bookingInvoice(bookingId: string): Promise<InvoiceData | n
     `SELECT b.id, b.reference, b.created_at, b.check_in, b.check_out, b.status::text AS status,
             b.guest_name, b.guest_email, b.guest_phone, b.nights, b.guests,
             b.nightly_usd, b.base_subtotal, b.subtotal, b.cleaning_fee, b.service_fee, b.taxes,
-            p.host_id, hu.full_name AS host_name, hu.email AS host_email, p.name AS property_name, b.total_usd,
-            COALESCE(hc.commission_rate, ps.commission_rate) AS commission_rate,
+            p.host_id, hu.full_name AS host_name, hu.email AS host_email, p.name AS property_name, b.currency, b.total_usd,
+            COALESCE(b.commission_rate, hc.commission_rate, ps.commission_rate) AS commission_rate,
             pay.status AS payment_status, pay.method AS payment_method,
             pay.reference AS payment_reference, pay.refunded_usd
        ${BOOKING_BASE}

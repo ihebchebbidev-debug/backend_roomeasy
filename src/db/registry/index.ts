@@ -84,6 +84,20 @@ const finalisers: string[] = [
   `INSERT INTO trust_badge_rule (code, min_reservations, window_months, notes)
      VALUES ('genuse', 5, 24, 'Provisional rule: 5 completed reservations within 24 months.')
      ON CONFLICT (code) DO NOTHING;`,
+  // One-off backfill for the email_verified column added after launch: members
+  // who joined before this change keep signing in without a banner, new
+  // signups must confirm their address. The cutoff is fixed in time on
+  // purpose so it never re-verifies a genuinely new, unconfirmed account.
+  `UPDATE app_user SET email_verified = true
+      WHERE email_verified = false AND created_at < TIMESTAMPTZ '2026-09-25T06:48:29Z';`,
+  // Backfill the frozen commission rate for bookings written before the
+  // column existed, then enforce NOT NULL now that every row has a value.
+  `UPDATE booking b SET commission_rate = COALESCE(
+     (SELECT hc.commission_rate FROM property p JOIN host_commission hc ON hc.host_id = p.host_id WHERE p.id = b.property_id),
+     (SELECT commission_rate FROM platform_settings LIMIT 1),
+     0)
+   WHERE b.commission_rate IS NULL;`,
+  `ALTER TABLE booking ALTER COLUMN commission_rate SET NOT NULL;`,
 ];
 
 export const schemaDefinition: SchemaDefinition = {

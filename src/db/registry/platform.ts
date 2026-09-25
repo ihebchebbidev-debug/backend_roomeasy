@@ -26,6 +26,12 @@ export const platformTables: TableDef[] = [
       { name: "rate_weekend_percent", type: "numeric(5,2)", notNull: true, default: "15" },
       { name: "rate_long_stay_percent", type: "numeric(5,2)", notNull: true, default: "10" },
       { name: "rate_last_minute_percent", type: "numeric(5,2)", notNull: true, default: "5" },
+      { name: "social_instagram", type: "text", notNull: true, default: "''" },
+      { name: "social_x", type: "text", notNull: true, default: "''" },
+      { name: "social_facebook", type: "text", notNull: true, default: "''" },
+      { name: "social_linkedin", type: "text", notNull: true, default: "''" },
+      { name: "social_tiktok", type: "text", notNull: true, default: "''" },
+      { name: "social_youtube", type: "text", notNull: true, default: "''" },
       { name: "updated_at", type: "timestamptz", notNull: true, default: "now()" },
     ],
   },
@@ -73,7 +79,7 @@ export const platformTables: TableDef[] = [
     name: "exchange_rate",
     primaryKey: ["base_currency", "quote_currency"],
     columns: [
-      { name: "base_currency", type: "char(3)", notNull: true, default: "'USD'" },
+      { name: "base_currency", type: "char(3)", notNull: true, default: "'EUR'" },
       { name: "quote_currency", type: "char(3)", notNull: true },
       { name: "rate", type: "numeric(18,8)", notNull: true, check: "rate > 0" },
       { name: "fetched_at", type: "timestamptz", notNull: true, default: "now()" },
@@ -120,5 +126,16 @@ export const platformTables: TableDef[] = [
       { name: "created_at", type: "timestamptz", notNull: true, default: "now()" },
     ],
     indexes: [{ name: "schema_migration_log_created_idx", on: "created_at DESC" }],
+  },
+  {
+    name: "rate_limit_bucket",
+    comment: "Shared login/reset attempt counters, so limits survive restarts and apply across server instances.",
+    primaryKey: ["key"],
+    columns: [
+      { name: "key", type: "text", notNull: true },
+      { name: "count", type: "integer", notNull: true, default: "0" },
+      { name: "reset_at", type: "timestamptz", notNull: true },
+    ],
+    indexes: [{ name: "rate_limit_bucket_reset_idx", on: "reset_at" }],
   },
 ];

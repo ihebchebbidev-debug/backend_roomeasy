@@ -42,6 +42,7 @@ export const enums: EnumDef[] = [
   {
     name: "moderation_action",
     values: [
+      "conversation_viewed",
       "review_hidden",
       "review_restored",
       "review_deleted",
@@ -85,7 +86,7 @@ export const enums: EnumDef[] = [
   { name: "ticket_priority", values: ["low", "normal", "high", "urgent"] },
   {
     name: "ticket_category",
-    values: ["booking", "payment", "listing", "account", "dispute", "other"],
+    values: ["booking", "payment", "listing", "account", "dispute", "other", "review"],
   },
   { name: "verification_status", values: ["pending", "verified", "rejected"] },
   { name: "notification_status", values: ["queued", "sending", "sent", "failed"] },

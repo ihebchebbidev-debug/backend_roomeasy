@@ -5,8 +5,13 @@ export type PlatformSettings = {
   taxRate: number;
   commissionRate: number;
   rateRules: { weekend: number; longStay: number; lastMinute: number };
+  socialLinks: SocialLinks;
   updatedAt: string;
 };
+
+export const SOCIAL_KEYS = ["instagram", "x", "facebook", "linkedin", "tiktok", "youtube"] as const;
+export type SocialKey = (typeof SOCIAL_KEYS)[number];
+export type SocialLinks = Record<SocialKey, string>;
 
 type SettingsRow = {
   service_fee_rate: string;
@@ -15,6 +20,12 @@ type SettingsRow = {
   rate_weekend_percent: string;
   rate_long_stay_percent: string;
   rate_last_minute_percent: string;
+  social_instagram?: string | null;
+  social_x?: string | null;
+  social_facebook?: string | null;
+  social_linkedin?: string | null;
+  social_tiktok?: string | null;
+  social_youtube?: string | null;
   updated_at: Date;
 };
 
@@ -28,6 +39,9 @@ function mapSettings(row: SettingsRow): PlatformSettings {
       longStay: Number(row.rate_long_stay_percent),
       lastMinute: Number(row.rate_last_minute_percent),
     },
+    socialLinks: Object.fromEntries(
+      SOCIAL_KEYS.map((k) => [k, (row[`social_${k}` as keyof SettingsRow] as string | null | undefined) ?? ""]),
+    ) as SocialLinks,
     updatedAt: row.updated_at.toISOString(),
   };
 }
@@ -58,7 +72,9 @@ export async function updatePlatformSettings(patch: {
   weekend?: number;
   longStay?: number;
   lastMinute?: number;
+  socialLinks?: Partial<SocialLinks>;
 }): Promise<PlatformSettings> {
+  const social = patch.socialLinks ?? {};
   const row = await queryOne<SettingsRow>(
     `UPDATE platform_settings SET
        service_fee_rate         = coalesce($1, service_fee_rate),
@@ -67,6 +83,12 @@ export async function updatePlatformSettings(patch: {
        rate_weekend_percent     = coalesce($4, rate_weekend_percent),
        rate_long_stay_percent   = coalesce($5, rate_long_stay_percent),
        rate_last_minute_percent = coalesce($6, rate_last_minute_percent),
+       social_instagram         = coalesce($7, social_instagram),
+       social_x                 = coalesce($8, social_x),
+       social_facebook          = coalesce($9, social_facebook),
+       social_linkedin          = coalesce($10, social_linkedin),
+       social_tiktok            = coalesce($11, social_tiktok),
+       social_youtube           = coalesce($12, social_youtube),
        updated_at               = now()
      WHERE id = true
      RETURNING *`,
@@ -77,6 +99,7 @@ export async function updatePlatformSettings(patch: {
       patch.weekend ?? null,
       patch.longStay ?? null,
       patch.lastMinute ?? null,
+      ...SOCIAL_KEYS.map((k) => social[k] ?? null),
     ],
     { label: "settings.update" },
   );

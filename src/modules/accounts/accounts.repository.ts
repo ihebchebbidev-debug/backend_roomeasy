@@ -14,6 +14,7 @@ export type AccountDto = {
   email: string;
   phone: string | null;
   verified: boolean;
+  emailVerified: boolean;
   suspended: boolean;
   avatarUrl: string | null;
   locale: string;
@@ -38,6 +39,7 @@ type AccountRow = {
   email: string;
   phone: string | null;
   verified: boolean;
+  email_verified: boolean;
   suspended: boolean;
   avatar_url: string | null;
   locale: string;
@@ -55,7 +57,7 @@ type AccountRow = {
 };
 
 const accountSelect = `
-  SELECT u.id, u.full_name, u.email, u.phone, u.verified, u.suspended, u.avatar_url,
+  SELECT u.id, u.full_name, u.email, u.phone, u.verified, u.email_verified, u.suspended, u.avatar_url,
          u.locale, u.currency, u.two_factor_enabled, u.joined_on, u.last_login_at,
          coalesce(array_agg(DISTINCT g.role) FILTER (WHERE g.role IS NOT NULL), '{}')::text[] AS roles,
          h.display_name AS host_display_name, h.hosting_since, h.superhost, h.bio,
@@ -74,6 +76,7 @@ export function mapAccount(row: AccountRow): AccountDto {
     email: row.email,
     phone: row.phone,
     verified: row.verified,
+    emailVerified: row.email_verified,
     suspended: row.suspended,
     avatarUrl: row.avatar_url,
     locale: row.locale,
@@ -672,4 +675,71 @@ export async function deleteOwnAccount(input: {
   }, "accounts.deleteOwnAccount");
 
   return { deletedAt: deletedAt.toISOString() };
+}
+
+// ---------------------------------------------------------------------------
+// Email verification (signup address confirmation — separate from identity)
+// ---------------------------------------------------------------------------
+
+/**
+ * Issues a single-use, expiring token and returns the plain value so the
+ * caller can email it; only its hash is stored, mirroring the password reset
+ * design above.
+ */
+export async function createEmailVerificationToken(
+  userId: string,
+): Promise<{ token: string; expiresAt: string } | null> {
+  const user = await queryOne<{ email_verified: boolean }>(
+    `SELECT email_verified FROM app_user WHERE id = $1 AND deleted_at IS NULL`,
+    [userId],
+    { label: "accounts.findForVerification" },
+  );
+  if (!user || user.email_verified) return null;
+
+  const token = randomBytes(32).toString("base64url");
+  const created = await queryOne<{ expires_at: Date }>(
+    `INSERT INTO email_verification_token (user_id, token_hash, expires_at)
+     VALUES ($1, $2, now() + interval '48 hours')
+     RETURNING expires_at`,
+    [userId, hashToken(token)],
+    { label: "accounts.createEmailVerificationToken" },
+  );
+
+  return { token, expiresAt: created!.expires_at.toISOString() };
+}
+
+export async function verifyEmailWithToken(token: string): Promise<void> {
+  const row = await queryOne<{ id: string; user_id: string }>(
+    `SELECT id, user_id FROM email_verification_token
+      WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now()`,
+    [hashToken(token)],
+    { label: "accounts.findVerificationToken" },
+  );
+  if (!row) throw apiError("VERIFICATION_TOKEN_INVALID", { message: "This verification link is invalid or has expired." });
+
+  await transaction(async (client) => {
+    await query(`UPDATE app_user SET email_verified = true WHERE id = $1`, [row.user_id], {
+      client,
+      label: "accounts.applyEmailVerification",
+    });
+    await query(`UPDATE email_verification_token SET used_at = now() WHERE id = $1`, [row.id], {
+      client,
+      label: "accounts.consumeVerificationToken",
+    });
+  }, "accounts.verifyEmail");
+}
+
+/** Used by the resend endpoint; returns null when the account is unknown or already verified so the route stays neutral. */
+export async function createEmailVerificationTokenForEmail(
+  email: string,
+): Promise<{ token: string; expiresAt: string; userId: string; fullName: string; locale: string } | null> {
+  const row = await queryOne<{ id: string; full_name: string; locale: string; email_verified: boolean }>(
+    `SELECT id, full_name, locale, email_verified FROM app_user WHERE lower(email) = lower($1) AND deleted_at IS NULL`,
+    [email],
+    { label: "accounts.findForResendVerification" },
+  );
+  if (!row || row.email_verified) return null;
+  const issued = await createEmailVerificationToken(row.id);
+  if (!issued) return null;
+  return { ...issued, userId: row.id, fullName: row.full_name, locale: row.locale };
 }

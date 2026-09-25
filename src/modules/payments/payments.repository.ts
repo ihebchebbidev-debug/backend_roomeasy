@@ -42,7 +42,7 @@ export async function payableBooking(idOrReference: string): Promise<PayableBook
     `SELECT b.id, b.reference, b.guest_id, b.guest_email, b.guest_name, b.status::text AS status,
             b.currency, b.total_usd, p.name AS property_name,
             hp.user_id AS host_id, hu.email AS host_email,
-            COALESCE(hc.commission_rate, ps.commission_rate) AS commission_rate,
+            COALESCE(b.commission_rate, hc.commission_rate, ps.commission_rate) AS commission_rate,
             hp.stripe_account_id, hp.payouts_onboarded, p.instant_book
        FROM booking b
        JOIN property p ON p.id = b.property_id
