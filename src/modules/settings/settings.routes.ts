@@ -5,7 +5,7 @@ import { asyncHandler, ok } from "@/core/http.js";
 import { validateBody } from "@/core/validate.js";
 import { currentUser, requireRole } from "@/middleware/auth.js";
 import { recordModeration } from "@/modules/admin/moderation.repository.js";
-import { getPlatformSettings, updatePlatformSettings, SOCIAL_KEYS, type SocialKey } from "@/modules/settings/settings.repository.js";
+import { getPlatformSettings, updatePlatformSettings } from "@/modules/settings/settings.repository.js";
 import {
   INTEGRATION_KEYS,
   integrationView,
@@ -16,6 +16,13 @@ import { sendMail, verifyMailer } from "@/modules/notifications/mailer.js";
 import { stripeClient, stripeStatus } from "@/modules/payments/stripe.client.js";
 
 export const settingsRouter = Router();
+
+const socialLinkField = z
+  .string()
+  .trim()
+  .max(500)
+  .refine((v) => v === "" || /^https?:\/\/\S+$/i.test(v), "Use a full link starting with https://")
+  .optional();
 
 const integrationPatchSchema = z
   .object(Object.fromEntries(INTEGRATION_KEYS.map((k) => [k, z.string().max(2000).optional()])) as Record<IntegrationKey, z.ZodOptional<z.ZodString>>)
@@ -86,14 +93,14 @@ const settingsPatchSchema = z
     longStay: z.number().min(0).max(90).optional(),
     lastMinute: z.number().min(0).max(90).optional(),
     socialLinks: z
-      .object(
-        Object.fromEntries(
-          SOCIAL_KEYS.map((k) => [
-            k,
-            z.string().trim().max(500).refine((v) => v === "" || /^https?:\/\/\S+$/i.test(v), "Use a full link starting with https://").optional(),
-          ]),
-        ) as unknown as Record<SocialKey, z.ZodTypeAny>,
-      )
+      .object({
+        instagram: socialLinkField,
+        x: socialLinkField,
+        facebook: socialLinkField,
+        linkedin: socialLinkField,
+        tiktok: socialLinkField,
+        youtube: socialLinkField,
+      })
       .strict()
       .optional(),
   })

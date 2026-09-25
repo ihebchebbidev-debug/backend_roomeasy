@@ -136,7 +136,8 @@ export async function listThreads(
 
   values.push(options.limit ?? 50, options.offset ?? 0);
 
-  const rows = await query<ThreadRow>(
+  // The page and the overall totals are independent: fetch them together.
+  const rowsQ = query<ThreadRow>(
     `${THREAD_SELECT}
       WHERE ${where.join(" AND ")}
       ORDER BY coalesce(t.last_message_at, t.created_at) DESC
@@ -145,7 +146,7 @@ export async function listThreads(
     { label: "messaging.listThreads" },
   );
 
-  const totals = await queryOne<{ total: string; unread: string }>(
+  const totalsQ = queryOne<{ total: string; unread: string }>(
     `SELECT count(DISTINCT t.id) AS total,
             coalesce(sum((SELECT count(*) FROM message m
                            WHERE m.thread_id = t.id AND m.read_at IS NULL
@@ -155,6 +156,7 @@ export async function listThreads(
     [viewerId],
     { label: "messaging.threadTotals" },
   );
+  const [rows, totals] = await Promise.all([rowsQ, totalsQ]);
 
   return {
     items: rows.map((row) => mapThread(row, viewerId)),

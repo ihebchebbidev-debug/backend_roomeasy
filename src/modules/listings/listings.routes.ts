@@ -120,6 +120,31 @@ listingsRouter.put(
   }),
 );
 
+/**
+ * Several of the host's own stays in one call (instead of one request per
+ * listing). Ids the caller does not own are silently left out.
+ */
+listingsRouter.get(
+  "/batch",
+  asyncHandler(async (req, res) => {
+    const { ids } = validateQuery(z.object({ ids: z.string().max(8000) }), req);
+    const wanted = [...new Set(ids.split(",").map((id) => id.trim()).filter(Boolean))].slice(0, 100);
+    const caller = { userId: currentUser(req).userId, isAdmin: isAdmin(req) };
+    const rows = await Promise.all(
+      wanted.map(async (listingId) => {
+        try {
+          const owned = await assertListingOwner(listingId, caller);
+          const property = await findPropertyById(owned.propertyId, { includeUnpublished: true });
+          return property ? { listingId, property } : null;
+        } catch {
+          return null;
+        }
+      }),
+    );
+    return ok(res, rows.filter(Boolean));
+  }),
+);
+
 /** The full stay record as guests will see it (host preview). */
 listingsRouter.get(
   "/:listingId",

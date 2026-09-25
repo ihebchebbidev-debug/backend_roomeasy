@@ -53,8 +53,19 @@ async function fetchFromProvider(): Promise<Record<string, number> | null> {
   }
 }
 
+// In-memory copy so quotes and dashboards do not re-read the table every call.
+const MEMO_MS = 5 * 60_000;
+let memo: { at: number; value: RatesPayload } | null = null;
+
 /** Reads the cached rates, refreshing them from the provider when stale. */
 export async function getRates(options: { force?: boolean } = {}): Promise<RatesPayload> {
+  if (!options.force && memo && Date.now() - memo.at < MEMO_MS) return memo.value;
+  const value = await loadRates(options);
+  memo = value.source === "unavailable" ? null : { at: Date.now(), value };
+  return value;
+}
+
+async function loadRates(options: { force?: boolean }): Promise<RatesPayload> {
   const stored = await listExchangeRates();
   const newest = stored.reduce<string | null>(
     (latest, row) => (latest === null || row.fetchedAt > latest ? row.fetchedAt : latest),

@@ -53,7 +53,10 @@ export const accountTables: TableDef[] = [
       { name: "created_at", type: "timestamptz", notNull: true, default: "now()" },
       { name: "updated_at", type: "timestamptz", notNull: true, default: "now()" },
     ],
-    indexes: [{ name: "app_user_email_lower_idx", on: "lower(email)" }],
+    indexes: [
+      { name: "app_user_email_lower_idx", on: "lower(email)" },
+      { name: "app_user_suspended_idx", on: "suspended", where: "suspended" },
+    ],
   },
 
   {

@@ -34,6 +34,7 @@ export type TemplateKey =
   | "booking_confirmed"
   | "payment_failed"
   | "password_reset"
+  | "email_verification"
   | "booking_requested_guest"
   | "booking_requested_host"
   | "booking_confirmed_guest"
@@ -174,6 +175,13 @@ const CATALOGUE: Record<TemplateKey, TemplateEntry> = {
     es: { subject: "Tu código de verificación", body: "Tu código de verificación es: {{code}}" },
     de: { subject: "Ihr Verifizierungscode", body: "Ihr Verifizierungscode lautet: {{code}}" },
     pt: { subject: "O seu código de verificação", body: "O seu código de verificação é: {{code}}" },
+  },
+  email_verification: {
+    en: { subject: "Confirm your email address", body: "Please confirm your email address: {{link}}" },
+    fr: { subject: "Confirmez votre adresse e-mail", body: "Veuillez confirmer votre adresse e-mail : {{link}}" },
+    es: { subject: "Confirma tu correo electrónico", body: "Confirma tu dirección de correo: {{link}}" },
+    de: { subject: "Bestätigen Sie Ihre E-Mail-Adresse", body: "Bitte bestätigen Sie Ihre E-Mail-Adresse: {{link}}" },
+    pt: { subject: "Confirme o seu e-mail", body: "Confirme o seu endereço de e-mail: {{link}}" },
   },
   booking_requested_guest: {
     en: { subject: "Your request for {{stayName}} was sent", body: "Your booking request {{reference}} for {{stayName}} ({{checkIn}} → {{checkOut}}) was sent to the host. Total: {{total}}. You will be notified as soon as it is answered.\n\nView the booking: {{link}}" },

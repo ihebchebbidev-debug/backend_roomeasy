@@ -5,6 +5,7 @@ import helmet from "helmet";
 import { corsOrigins } from "@/config/env.js";
 import { authenticate } from "@/middleware/auth.js";
 import { cacheControl } from "@/middleware/cacheControl.js";
+import { invalidateCatalogueOnWrite } from "@/core/catalogueCache.js";
 import { compression } from "@/middleware/compression.js";
 import { errorHandler, notFoundHandler } from "@/middleware/errorHandler.js";
 import { rateLimit } from "@/middleware/rateLimit.js";
@@ -76,6 +77,9 @@ export function createApp(): Express {
 
   // Attaches `req.auth` when a token is present, without rejecting anonymous calls.
   app.use(authenticate);
+
+  // Any successful write drops the in-memory stays cache so search is never stale.
+  app.use(invalidateCatalogueOnWrite);
 
   // Cache hints: short CDN caching for anonymous catalogue reads, no-store elsewhere.
   app.use(cacheControl);

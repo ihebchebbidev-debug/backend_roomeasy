@@ -126,7 +126,7 @@ accountsRouter.post(
       await queueNotification({
         recipientId: account.id,
         recipientEmail: account.email,
-        template: "password_reset",
+        template: "email_verification",
         subject: `Confirm your ${env.APP_NAME} email address`,
         body: [
           `Welcome to ${env.APP_NAME}, ${account.fullName}!`,
@@ -393,7 +393,7 @@ accountsRouter.post(
       await queueNotification({
         recipientId: issued.userId,
         recipientEmail: body.email,
-        template: "password_reset",
+        template: "email_verification",
         subject: `Confirm your ${env.APP_NAME} email address`,
         body: [
           `Please confirm your email address: ${link}`,

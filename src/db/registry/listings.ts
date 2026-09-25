@@ -74,6 +74,7 @@ export const listingTables: TableDef[] = [
       { name: "property_category_idx", on: "category" },
       { name: "property_city_idx", on: "lower(city)" },
       { name: "property_postal_idx", on: "postal_code" },
+      { name: "property_rating_idx", on: "rating DESC" },
       { name: "property_price_idx", on: "base_price_usd" },
       { name: "property_city_price_idx", on: "lower(city), base_price_usd" },
       { name: "property_created_idx", on: "created_at DESC" },
@@ -111,7 +112,10 @@ export const listingTables: TableDef[] = [
       { name: "created_at", type: "timestamptz", notNull: true, default: "now()" },
     ],
     constraints: [{ name: "property_photo_position_unique", definition: "UNIQUE (property_id, position)" }],
-    indexes: [{ name: "property_photo_property_idx", on: "property_id" }],
+    indexes: [
+      { name: "property_photo_property_idx", on: "property_id" },
+      { name: "property_photo_cover_idx", on: "property_id, position" },
+    ],
   },
 
   {

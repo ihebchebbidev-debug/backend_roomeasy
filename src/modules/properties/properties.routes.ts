@@ -13,6 +13,7 @@ import {
   unavailablePropertyIds,
   type SearchFilters,
 } from "@/modules/properties/properties.repository.js";
+import { cachedCatalogue } from "@/core/catalogueCache.js";
 import { listPropertyReviews } from "@/modules/reviews/reviews.repository.js";
 import { calendarForProperty } from "@/modules/listings/calendar.repository.js";
 
@@ -116,7 +117,8 @@ propertiesRouter.get(
   asyncHandler(async (req, res) => {
     const input = validateQuery(searchQuerySchema, req);
     const filters = await toFilters(input);
-    const { items, total } = await searchProperties(filters);
+    const key = JSON.stringify(req.query);
+    const { items, total } = await cachedCatalogue(key, () => searchProperties(filters));
     return ok(res, items, {
       total,
       limit: filters.limit,

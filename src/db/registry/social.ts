@@ -103,6 +103,9 @@ export const socialTables: TableDef[] = [
       { name: "read_at", type: "timestamptz" },
     ],
     constraints: [{ name: "message_legacy_unique", definition: "UNIQUE (thread_id, legacy_id)" }],
-    indexes: [{ name: "message_thread_idx", on: "thread_id, sent_at" }],
+    indexes: [
+      { name: "message_thread_idx", on: "thread_id, sent_at" },
+      { name: "message_unread_idx", on: "thread_id, sender_id", where: "read_at IS NULL" },
+    ],
   },
 ];

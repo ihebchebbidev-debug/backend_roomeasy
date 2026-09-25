@@ -19,7 +19,7 @@ export type AdminOverview = {
 };
 
 export async function adminOverview(): Promise<AdminOverview> {
-  const users = await queryOne<{
+  const usersQ = queryOne<{
     total: string;
     guests: string;
     hosts: string;
@@ -39,7 +39,7 @@ export async function adminOverview(): Promise<AdminOverview> {
     { label: "admin.overview.users" },
   );
 
-  const listings = await queryOne<{ total: string; published: string; awaiting: string; suspended: string }>(
+  const listingsQ = queryOne<{ total: string; published: string; awaiting: string; suspended: string }>(
     `SELECT count(*) AS total,
             count(*) FILTER (WHERE status = 'published' AND approved) AS published,
             count(*) FILTER (WHERE NOT approved) AS awaiting,
@@ -49,7 +49,7 @@ export async function adminOverview(): Promise<AdminOverview> {
     { label: "admin.overview.listings" },
   );
 
-  const bookings = await queryOne<{
+  const bookingsQ = queryOne<{
     total: string;
     pending: string;
     confirmed: string;
@@ -70,15 +70,16 @@ export async function adminOverview(): Promise<AdminOverview> {
     { label: "admin.overview.bookings" },
   );
 
-  const payouts = await queryOne<{ paid: string; pending: string }>(
-    `SELECT coalesce(sum(amount_usd / coalesce((SELECT rate FROM exchange_rate xr WHERE xr.base_currency = 'EUR' AND xr.quote_currency = payout.currency), 1)) FILTER (WHERE status = 'paid'), 0) AS paid,
-            coalesce(sum(amount_usd / coalesce((SELECT rate FROM exchange_rate xr WHERE xr.base_currency = 'EUR' AND xr.quote_currency = payout.currency), 1)) FILTER (WHERE status = 'scheduled'), 0) AS pending
-       FROM payout`,
+  const payoutsQ = queryOne<{ paid: string; pending: string }>(
+    `SELECT coalesce(sum(amount_usd / coalesce(xr.rate, 1)) FILTER (WHERE status = 'paid'), 0) AS paid,
+            coalesce(sum(amount_usd / coalesce(xr.rate, 1)) FILTER (WHERE status = 'scheduled'), 0) AS pending
+       FROM payout
+       LEFT JOIN exchange_rate xr ON xr.base_currency = 'EUR' AND xr.quote_currency = payout.currency`,
     [],
     { label: "admin.overview.payouts" },
   );
 
-  const reviews = await queryOne<{ total: string; hidden: string; average: string | null }>(
+  const reviewsQ = queryOne<{ total: string; hidden: string; average: string | null }>(
     `SELECT count(*) AS total,
             count(*) FILTER (WHERE hidden) AS hidden,
             avg(rating) FILTER (WHERE NOT hidden) AS average
@@ -86,6 +87,9 @@ export async function adminOverview(): Promise<AdminOverview> {
     [],
     { label: "admin.overview.reviews" },
   );
+
+  // Independent counts: run them side by side instead of one after another.
+  const [users, listings, bookings, payouts, reviews] = await Promise.all([usersQ, listingsQ, bookingsQ, payoutsQ, reviewsQ]);
 
   return {
     users: {
