@@ -16,6 +16,7 @@ type TicketRow = {
   opened_by_name: string;
   opened_by_role: string;
   opened_by_email: string | null;
+  opened_by_avatar: string | null;
   booking_id: string | null;
   listing_id: string | null;
   assigned_to: string | null;
@@ -39,6 +40,7 @@ function mapTicket(row: TicketRow) {
     openedByName: row.opened_by_name,
     openedByRole: row.opened_by_role,
     openedByEmail: row.opened_by_email,
+    openedByAvatar: row.opened_by_avatar,
     bookingId: row.booking_id,
     listingId: row.listing_id,
     assignedTo: row.assigned_to,
@@ -53,7 +55,7 @@ function mapTicket(row: TicketRow) {
 
 const selectTicket = `
   SELECT t.id, t.reference, t.subject, t.category, t.priority, t.status,
-         t.opened_by, t.opened_by_name, t.opened_by_role, ou.email AS opened_by_email,
+         t.opened_by, t.opened_by_name, t.opened_by_role, ou.email AS opened_by_email, ou.avatar_url AS opened_by_avatar,
          t.booking_id, t.listing_id, t.assigned_to, au.full_name AS assignee_name,
          t.resolution, t.closed_at, t.last_activity_at, t.created_at,
          (SELECT count(*) FROM support_ticket_message m WHERE m.ticket_id = t.id)::text AS message_count
@@ -116,11 +118,14 @@ export async function getTicket(ticketId: string) {
     body: string;
     internal_note: boolean;
     sent_at: Date;
+    author_avatar: string | null;
   }>(
-    `SELECT id, author_id, author_name, author_role, body, internal_note, sent_at
-       FROM support_ticket_message
-      WHERE ticket_id = $1
-      ORDER BY sent_at`,
+    `SELECT m.id, m.author_id, m.author_name, m.author_role, m.body, m.internal_note, m.sent_at,
+            u.avatar_url AS author_avatar
+       FROM support_ticket_message m
+       LEFT JOIN app_user u ON u.id = m.author_id
+      WHERE m.ticket_id = $1
+      ORDER BY m.sent_at`,
     [ticketId],
     { label: "support.messages" },
   );
@@ -135,6 +140,7 @@ export async function getTicket(ticketId: string) {
       body: message.body,
       internalNote: message.internal_note,
       sentAt: message.sent_at.toISOString(),
+      avatarUrl: message.author_avatar,
     })),
   };
 }

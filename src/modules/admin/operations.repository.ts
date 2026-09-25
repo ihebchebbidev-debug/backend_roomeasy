@@ -355,12 +355,13 @@ export async function listHostCommissions(options: { limit: number; offset: numb
     host_id: string;
     host_name: string;
     email: string;
+    avatar_url: string | null;
     commission_rate: string | null;
     note: string | null;
     updated_at: Date | null;
     default_rate: string;
   }>(
-    `SELECT h.user_id AS host_id, u.full_name AS host_name, u.email,
+    `SELECT h.user_id AS host_id, u.full_name AS host_name, u.email, u.avatar_url,
             c.commission_rate, c.note, c.updated_at,
             (SELECT commission_rate FROM platform_settings WHERE id = true)::text AS default_rate
        FROM host_profile h
@@ -376,6 +377,7 @@ export async function listHostCommissions(options: { limit: number; offset: numb
     hostId: row.host_id,
     hostName: row.host_name,
     email: row.email,
+    avatarUrl: row.avatar_url,
     commissionRate: row.commission_rate === null ? null : Number(row.commission_rate),
     defaultRate: Number(row.default_rate),
     effectiveRate: Number(row.commission_rate ?? row.default_rate),

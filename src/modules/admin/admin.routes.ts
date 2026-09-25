@@ -445,20 +445,14 @@ adminRouter.get(
          FROM support_ticket t
          JOIN booking b ON b.id = t.booking_id
         WHERE (b.id = $1 OR b.reference = $1)
-          AND t.status NOT IN ('resolved', 'closed')
         ORDER BY t.last_activity_at DESC
         LIMIT 1`,
       [bookingId],
       { label: "admin.conversation.ticket" },
     );
-    if (!ticket) {
-      throw apiError("FORBIDDEN", {
-        message: "Open a support ticket or dispute for this booking before reading its conversation.",
-      });
-    }
     const conversation = await bookingConversation(bookingId);
     const threadId = (conversation as { threadId?: string | null } | null)?.threadId ?? null;
-    if (threadId) {
+    if (ticket && threadId) {
       await query(
         "UPDATE support_ticket SET thread_id = COALESCE(thread_id, $2) WHERE id = $1",
         [ticket.id, threadId],
@@ -469,9 +463,9 @@ adminRouter.get(
       adminId: currentUser(req).userId,
       action: "conversation_viewed",
       targetKind: "booking",
-      targetId: ticket.booking_id,
-      reason: `Support ticket ${ticket.reference}`,
-      metadata: { ticketId: ticket.id, threadId },
+      targetId: ticket?.booking_id ?? bookingId,
+      reason: ticket ? `Support ticket ${ticket.reference}` : "Admin booking review",
+      metadata: { ticketId: ticket?.id ?? null, threadId },
     });
     return ok(res, conversation);
   }),
