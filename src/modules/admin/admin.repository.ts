@@ -42,7 +42,7 @@ export async function adminOverview(): Promise<AdminOverview> {
   const listingsQ = queryOne<{ total: string; published: string; awaiting: string; suspended: string }>(
     `SELECT count(*) AS total,
             count(*) FILTER (WHERE status = 'published' AND approved) AS published,
-            count(*) FILTER (WHERE NOT approved) AS awaiting,
+            count(*) FILTER (WHERE NOT approved AND status <> 'suspended') AS awaiting,
             count(*) FILTER (WHERE status = 'suspended') AS suspended
        FROM listing`,
     [],
