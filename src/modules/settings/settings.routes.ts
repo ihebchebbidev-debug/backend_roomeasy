@@ -92,7 +92,7 @@ const settingsPatchSchema = z
             k,
             z.string().trim().max(500).refine((v) => v === "" || /^https?:\/\/\S+$/i.test(v), "Use a full link starting with https://").optional(),
           ]),
-        ) as Record<SocialKey, z.ZodTypeAny>,
+        ) as unknown as Record<SocialKey, z.ZodTypeAny>,
       )
       .strict()
       .optional(),
