@@ -66,7 +66,7 @@ adminCatalogRouter.put(
       z.object({
         group: z.string().trim().min(1).max(40),
         labelEn: z.string().trim().min(1).max(120),
-        labelFr: z.string().trim().min(1).max(120),
+        labelFr: z.string().trim().max(120).default(""),
         labelEs: z.string().trim().max(120).default(""),
         labelDe: z.string().trim().max(120).default(""),
         labelPt: z.string().trim().max(120).default(""),
@@ -75,7 +75,8 @@ adminCatalogRouter.put(
       }),
       req,
     );
-    const item = await upsertAmenity({ id, ...body });
+    // Only English is mandatory; French falls back to it, like accommodation types.
+    const item = await upsertAmenity({ id, ...body, labelFr: body.labelFr || body.labelEn });
     await recordModeration({
       adminId: currentUser(req).userId,
       action: "taxonomy_updated",
