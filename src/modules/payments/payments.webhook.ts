@@ -67,7 +67,7 @@ async function handleEvent(event: Stripe.Event): Promise<void> {
     case "payment_intent.succeeded": {
       const intent = event.data.object as Stripe.PaymentIntent;
       const bookingId = intent.metadata?.["bookingId"] ?? null;
-      const card = intent.payment_method as unknown as { card?: { brand?: string; last4?: string } } | null;
+      const card = await cardDetails(intent);
 
       if (bookingId) {
         await recordStripePayment({
@@ -108,7 +108,7 @@ async function handleEvent(event: Stripe.Event): Promise<void> {
       const intent = event.data.object as Stripe.PaymentIntent;
       const bookingId = intent.metadata?.["bookingId"] ?? null;
       if (bookingId) {
-        const card = intent.payment_method as unknown as { card?: { brand?: string; last4?: string } } | null;
+        const card = await cardDetails(intent);
         await recordStripePayment({
           bookingId,
           intentId: intent.id,
@@ -193,5 +193,20 @@ async function handleEvent(event: Stripe.Event): Promise<void> {
 
     default:
       logger.debug({ type: event.type }, "unhandled stripe event");
+  }
+}
+
+
+/** Webhook payloads carry only the payment method id: fetch it to learn the card brand and last 4 digits. */
+async function cardDetails(intent: Stripe.PaymentIntent): Promise<{ card?: { brand?: string; last4?: string } } | null> {
+  const pm = intent.payment_method;
+  try {
+    const method = typeof pm === "string" ? await requireStripe().paymentMethods.retrieve(pm) : pm;
+    if (!method?.card) return null;
+    const known = ["visa", "mastercard", "amex"];
+    return { card: { brand: known.includes(method.card.brand) ? method.card.brand : "card", last4: method.card.last4 } };
+  } catch (error) {
+    logger.warn({ intent: intent.id, error }, "could not read card details");
+    return null;
   }
 }
