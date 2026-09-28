@@ -580,7 +580,7 @@ async function run() {
       method: "POST",
       token: state.guestToken,
       body: {
-        propertyId: state.propertyId,
+        propertyId: state.publicPropertyId ?? state.propertyId,
         from: futureDate(40),
         to: futureDate(43),
         guests: 2,

@@ -290,7 +290,7 @@ export async function listTeamMembers(hostId: string): Promise<TeamMemberDto[]> 
     scopes: string[];
     created_at: Date;
   }>(
-    `SELECT id, full_name, email, scopes, created_at FROM host_team_member
+    `SELECT id, full_name, email, scopes::text[] AS scopes, created_at FROM host_team_member
       WHERE host_id = $1 ORDER BY created_at`,
     [hostId],
     { label: "host.listTeam" },
@@ -326,7 +326,7 @@ export async function addTeamMember(input: {
   const row = await queryOne<{ id: string; full_name: string; email: string; scopes: string[]; created_at: Date }>(
     `INSERT INTO host_team_member (id, host_id, full_name, email, scopes)
      VALUES ($1, $2, $3, $4, $5::team_scope[])
-     RETURNING id, full_name, email, scopes, created_at`,
+     RETURNING id, full_name, email, scopes::text[] AS scopes, created_at`,
     [teamMemberId(), input.hostId, input.fullName.trim(), input.email.trim().toLowerCase(), input.scopes],
     { label: "host.addTeamMember" },
   );

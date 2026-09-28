@@ -86,6 +86,8 @@ export type BookingDto = {
     cancelledAt: string;
   } | null;
   cancellationPolicy: CancellationPolicy;
+  /** The guest's review of this stay, when one was left. */
+  review: { id: string; rating: number; body: string; date: string } | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -129,6 +131,7 @@ type BookingRow = {
     reason: string | null;
     cancelled_at: string;
   } | null;
+  review: { id: string; rating: number; body: string; created_at: string } | null;
   created_at: Date;
   updated_at: Date;
 };
@@ -151,6 +154,8 @@ const SELECT_BOOKING = `
                                    'refund_percent', c.refund_percent, 'refund_usd', c.refund_usd,
                                    'reason', c.reason, 'cancelled_at', c.cancelled_at)
             FROM booking_cancellation c WHERE c.booking_id = b.id) AS cancellation,
+         (SELECT json_build_object('id', r.id, 'rating', r.rating, 'body', r.body, 'created_at', r.created_at)
+            FROM review r WHERE r.booking_id = b.id LIMIT 1) AS review,
          b.created_at, b.updated_at
     FROM booking b
     JOIN property p ON p.id = b.property_id`;
@@ -224,6 +229,14 @@ function mapBooking(row: BookingRow): BookingDto {
         }
       : null,
     cancellationPolicy: row.cancellation_policy,
+    review: row.review
+      ? {
+          id: String(row.review.id),
+          rating: Number(row.review.rating),
+          body: row.review.body ?? "",
+          date: String(row.review.created_at).slice(0, 10),
+        }
+      : null,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
   };
@@ -524,6 +537,22 @@ export async function createBooking(input: {
   }
   if (input.from < today()) {
     throw apiError("DATES_IN_PAST", { details: { from: input.from, today: today() } });
+  }
+
+  // The same guest retrying after leaving checkout: release their own unpaid
+  // holds on overlapping nights so they are not blocked by themselves.
+  if (input.guestId) {
+    await query(
+      `WITH released AS (
+         UPDATE booking b SET status = 'cancelled', updated_at = now()
+          WHERE b.property_id = $1 AND b.guest_id = $2 AND b.status = 'pending'
+            AND daterange(b.check_in, b.check_out, '[)') && daterange($3::date, $4::date, '[)')
+            AND NOT EXISTS (SELECT 1 FROM payment p WHERE p.booking_id = b.id AND p.status IN ('authorized', 'paid'))
+          RETURNING b.id)
+       UPDATE payment SET status = 'failed' WHERE booking_id IN (SELECT id FROM released) AND status = 'pending'`,
+      [input.propertyId, input.guestId, input.from, input.to],
+      { label: "bookings.releaseOwnHolds" },
+    );
   }
 
   const availability = await checkAvailability({
