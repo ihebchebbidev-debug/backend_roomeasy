@@ -173,6 +173,22 @@ export async function saveListing(input: {
     throw apiError("PROPERTY_ID_TAKEN", { details: { propertyId: draft.propertyId } });
   }
 
+  // The listing row is upserted by id too: it must belong to this same
+  // property (and so to this host), or another host's listing could be overwritten.
+  const existingListing = await queryOne<{ property_id: string; host_id: string | null }>(
+    `SELECT l.property_id, p.host_id FROM listing l LEFT JOIN property p ON p.id = l.property_id WHERE l.id = $1`,
+    [draft.listingId],
+    { label: "listings.listingOwnerCheck" },
+  );
+  if (
+    existingListing &&
+    !input.isAdmin &&
+    (existingListing.property_id !== draft.propertyId ||
+      (existingListing.host_id && existingListing.host_id !== input.hostId))
+  ) {
+    throw apiError("FORBIDDEN", { message: "This listing belongs to another account." });
+  }
+
   const savedAt = await transaction(async (client) => {
     const property = await queryOne<{ id: string }>(
       `INSERT INTO property (

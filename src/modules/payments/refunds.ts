@@ -51,11 +51,16 @@ export async function refundThroughStripe(bookingId: string, amountUsd: number):
   const amountMinor = Math.min(toMinorUnits(amountUsd), remainingMinor);
   if (amountMinor <= 0) return null;
 
-  const refund = await stripe.refunds.create({
-    ...(payment.intentId ? { payment_intent: payment.intentId } : { charge: payment.chargeId as string }),
-    amount: amountMinor,
-    metadata: { bookingId },
-  });
+  // The key includes what is left on the charge, so a retried identical request
+  // is deduplicated by Stripe while a genuine later refund gets a new key.
+  const refund = await stripe.refunds.create(
+    {
+      ...(payment.intentId ? { payment_intent: payment.intentId } : { charge: payment.chargeId as string }),
+      amount: amountMinor,
+      metadata: { bookingId },
+    },
+    { idempotencyKey: `refund_${bookingId}_${remainingMinor}_${amountMinor}` },
+  );
   return refund.id;
 }
 

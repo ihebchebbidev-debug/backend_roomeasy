@@ -122,7 +122,7 @@ accountsRouter.post(
 
     const issued = await createEmailVerificationToken(account.id);
     if (issued) {
-      const link = `${env.PUBLIC_APP_URL ?? ""}/verify-email?token=${encodeURIComponent(issued.token)}`;
+      const link = `${(env.PUBLIC_APP_URL || env.APP_PUBLIC_URL).replace(/\/+$/, "")}/verify-email?token=${encodeURIComponent(issued.token)}`;
       await queueNotification({
         recipientId: account.id,
         recipientEmail: account.email,
@@ -256,7 +256,15 @@ accountsRouter.post(
           .trim()
           .min(4, "Enter the number shown on your identity document.")
           .max(80),
-        documentFiles: z.array(z.string()).optional(),
+        documentFiles: z
+          .array(
+            z
+              .string()
+              .max(4_200_000, "Each document must be under 3 MB.")
+              .regex(/^data:(image\/[a-z0-9.+-]+|application\/pdf);base64,/, "Upload a photo or a PDF."),
+          )
+          .max(4, "Upload at most 4 document files.")
+          .optional(),
       }),
       req,
     );
@@ -389,7 +397,7 @@ accountsRouter.post(
     const body = validateBody(z.object({ email: emailField }), req);
     const issued = await createEmailVerificationTokenForEmail(body.email);
     if (issued) {
-      const link = `${env.PUBLIC_APP_URL ?? ""}/verify-email?token=${encodeURIComponent(issued.token)}`;
+      const link = `${(env.PUBLIC_APP_URL || env.APP_PUBLIC_URL).replace(/\/+$/, "")}/verify-email?token=${encodeURIComponent(issued.token)}`;
       await queueNotification({
         recipientId: issued.userId,
         recipientEmail: body.email,

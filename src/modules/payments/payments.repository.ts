@@ -93,7 +93,14 @@ export async function recordStripePayment(input: {
                           stripe_payment_intent_id, stripe_charge_id, host_settled)
      VALUES ($1, 'card', $2::card_brand, $3, $4::payment_status, $5, $6, $6, $7, $8)
      ON CONFLICT (reference) DO UPDATE
-        SET status = EXCLUDED.status,
+        -- Stripe may deliver events late or out of order: never move a payment
+        -- backwards (paid -> authorized/failed, authorized -> failed/pending).
+        SET status = CASE
+              WHEN payment.status IN ('refunded') THEN payment.status
+              WHEN payment.status = 'paid' AND EXCLUDED.status IN ('authorized', 'failed', 'pending') THEN payment.status
+              WHEN payment.status = 'authorized' AND EXCLUDED.status IN ('failed', 'pending') THEN payment.status
+              ELSE EXCLUDED.status
+            END,
             brand = EXCLUDED.brand,
             last4 = EXCLUDED.last4,
             stripe_charge_id = COALESCE(EXCLUDED.stripe_charge_id, payment.stripe_charge_id),

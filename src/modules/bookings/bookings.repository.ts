@@ -899,7 +899,23 @@ export async function decideBooking(input: {
   // A declined request gives the guest everything back — through Stripe first,
   // so the database is never marked "refunded" for money that never moved.
   if (input.decision === "declined") {
-    await refundThroughStripe(booking.id, booking.price.totalUsd);
+    // Claim the decline first so a concurrent decline/cancel cannot refund twice.
+    const claimed = await query<{ id: string }>(
+      `UPDATE booking SET status = 'declined', updated_at = now()
+        WHERE id = $1 AND status = 'pending' RETURNING id`,
+      [booking.id],
+      { label: "bookings.declineClaim" },
+    );
+    if (!claimed.length) {
+      throw apiError("BOOKING_NOT_PENDING", { message: "This request has already been answered or cancelled." });
+    }
+    try {
+      await refundThroughStripe(booking.id, booking.price.totalUsd);
+    } catch (error) {
+      await query(`UPDATE booking SET status = 'pending', updated_at = now() WHERE id = $1 AND status = 'declined'`,
+        [booking.id], { label: "bookings.declineUnclaim" });
+      throw error;
+    }
   } else {
     // Accepting is the moment the money is actually taken: until now it was
     // only held on the guest's card.
@@ -927,12 +943,16 @@ export async function decideBooking(input: {
       }
     }
 
-    await query(
+    // A decline was already claimed above; an acceptance must still be pending.
+    const decided = await query<{ id: string }>(
       `UPDATE booking SET status = $2::booking_status, decided_at = now(), decided_by = $3, updated_at = now()
-        WHERE id = $1`,
-      [booking.id, input.decision, input.actorId],
+        WHERE id = $1 AND status = $4::booking_status RETURNING id`,
+      [booking.id, input.decision, input.actorId, input.decision === "declined" ? "declined" : "pending"],
       { client, label: "bookings.decide" },
     );
+    if (!decided.length) {
+      throw apiError("BOOKING_NOT_PENDING", { message: "This request has already been answered or cancelled." });
+    }
 
     if (input.decision === "declined") {
       await query(
@@ -1024,7 +1044,25 @@ export async function cancelBooking(input: {
 
   // Send the money back through Stripe before recording the refund, so the
   // payment row can never claim a refund the card never received.
-  await refundThroughStripe(booking.id, refund.amountUsd);
+  // Claim the cancellation first: only one concurrent request (double click,
+  // guest and host at once, client retry) may go on to refund.
+  const claimed = await query<{ id: string }>(
+    `UPDATE booking SET status = 'cancelled', updated_at = now()
+      WHERE id = $1 AND status IN ('pending', 'confirmed') RETURNING id`,
+    [booking.id],
+    { label: "bookings.cancelClaim" },
+  );
+  if (!claimed.length) {
+    throw apiError("NOT_CANCELLABLE", { message: "This booking has already been cancelled or changed." });
+  }
+  try {
+    await refundThroughStripe(booking.id, refund.amountUsd);
+  } catch (error) {
+    // The money did not move: give the booking its previous status back.
+    await query(`UPDATE booking SET status = $2::booking_status, updated_at = now() WHERE id = $1 AND status = 'cancelled'`,
+      [booking.id, booking.status], { label: "bookings.cancelUnclaim" });
+    throw error;
+  }
 
   const row = await transaction(async (client) => {
 
