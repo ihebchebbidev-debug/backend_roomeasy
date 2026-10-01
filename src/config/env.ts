@@ -41,14 +41,16 @@ const envSchema = z.object({
   PUBLIC_APP_URL: z.string().optional(),
 
   // --- SMTP (OVH by default) -----------------------------------------------
-  SMTP_HOST: z.string().default(""),
+  // Hardcoded OVH mailbox (support@roomeasy.fr) — the customer asked for these
+  // to be baked in so email works even without a .env file.
+  SMTP_HOST: z.string().default("ssl0.ovh.net"),
   SMTP_PORT: z.coerce.number().int().min(1).max(65535).default(465),
   SMTP_SECURE: boolish(true),
-  SMTP_USER: z.string().default(""),
-  SMTP_PASSWORD: z.string().default(""),
+  SMTP_USER: z.string().default("support@roomeasy.fr"),
+  SMTP_PASSWORD: z.string().default("Roomeasy2026"),
   MAIL_FROM_NAME: z.string().default("RoomEasy"),
-  MAIL_FROM_ADDRESS: z.string().default(""),
-  MAIL_REPLY_TO: z.string().optional(),
+  MAIL_FROM_ADDRESS: z.string().default("support@roomeasy.fr"),
+  MAIL_REPLY_TO: z.string().optional().default("support@roomeasy.fr"),
   MAIL_DRY_RUN: boolish(false),
   MAIL_WORKER: boolish(true),
   MAIL_POLL_SECONDS: z.coerce.number().int().min(5).max(3600).default(30),

@@ -256,5 +256,27 @@ export function renderTemplate(template: TemplateKey, locale: string | null | un
 
 export function bookingLink(bookingId: string): string {
   const base = process.env["PUBLIC_APP_URL"] || process.env["APP_URL"] || "https://roomeasy.fr";
-  return `${base.replace(/\/+$/, "")}/bookings/${bookingId}`;
+  return `${base.replace(/\/+$/, "")}/booking/${bookingId}`;
+}
+
+/**
+ * The catalogue copy for a queued notification, or null when the template is
+ * unknown or a placeholder it uses has no value in `data` (so an email never
+ * goes out with a blank where a name or date should be).
+ */
+export function localizedCopy(
+  template: string,
+  locale: string | null | undefined,
+  data: Record<string, unknown>,
+): TemplateCopy | null {
+  const entry = (CATALOGUE as Record<string, TemplateEntry | undefined>)[template];
+  if (!entry) return null;
+  const copy = entry[normalizeLocale(locale)];
+  const values: TemplateData = {};
+  for (const [key, value] of Object.entries(data)) {
+    if (typeof value === "string" || typeof value === "number") values[key] = value;
+  }
+  const needed = [...`${copy.subject} ${copy.body}`.matchAll(/\{\{(\w+)\}\}/g)].map((m) => m[1] as string);
+  if (needed.some((key) => values[key] === undefined || values[key] === "")) return null;
+  return { subject: interpolate(copy.subject, values), body: interpolate(copy.body, values) };
 }

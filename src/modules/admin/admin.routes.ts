@@ -27,6 +27,7 @@ import {
   rejectionMessage,
 } from "@/modules/admin/rejectionReasons.js";
 import { listModerationLog, recordModeration } from "@/modules/admin/moderation.repository.js";
+import { queueNotification } from "@/modules/admin/notifications.repository.js";
 import { adminOperationsRouter } from "@/modules/admin/operations.routes.js";
 import { adminCatalogRouter } from "@/modules/admin/catalog.routes.js";
 import { grantRole, revokeRole } from "@/modules/accounts/accounts.repository.js";
@@ -114,6 +115,15 @@ adminRouter.post(
       targetId: listingId,
       metadata: { propertyId: listing.propertyId },
     });
+    if (listing.hostId) {
+      await queueNotification({
+        recipientId: listing.hostId,
+        template: "listing_approved",
+        subject: "Your listing is now live",
+        body: "Good news — your listing has been approved and is now visible to guests.",
+        payload: { listingId },
+      });
+    }
     req.log.info({ listingId }, "listing approved");
     return ok(res, listing);
   }),
@@ -148,6 +158,15 @@ adminRouter.post(
       targetId: listingId,
       reason,
     });
+    if (listing.hostId) {
+      await queueNotification({
+        recipientId: listing.hostId,
+        template: "listing_rejected",
+        subject: "Your listing needs changes",
+        body: `An administrator reviewed your listing and it could not be approved yet. Reason: ${reason}`,
+        payload: { listingId, reason },
+      });
+    }
     req.log.info({ listingId, reason }, "listing rejected");
     return ok(res, listing);
   }),

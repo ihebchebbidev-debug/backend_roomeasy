@@ -1,6 +1,6 @@
 import { query, queryOne } from "@/db/query.js";
 
-import type { TemplateKey } from "@/modules/notifications/templates.js";
+import { localizedCopy, type TemplateKey } from "@/modules/notifications/templates.js";
 
 export type NotificationTemplate = TemplateKey;
 
@@ -34,6 +34,13 @@ export async function queueNotification(entry: {
 
   if (!email) return; // nothing to send to
 
+  // Send in the member's own language when the catalogue has every value the
+  // template needs; otherwise keep the wording the caller wrote.
+  const copy = localizedCopy(entry.template, locale, entry.payload ?? {}) ?? {
+    subject: entry.subject,
+    body: entry.body,
+  };
+
   await query(
     `INSERT INTO notification_outbox (recipient_id, recipient_email, template, locale, subject, body, payload)
      VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)`,
@@ -42,8 +49,8 @@ export async function queueNotification(entry: {
       email,
       entry.template,
       locale,
-      entry.subject,
-      entry.body,
+      copy.subject,
+      copy.body,
       JSON.stringify(entry.payload ?? {}),
     ],
     { label: "notifications.queue" },
