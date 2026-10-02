@@ -469,6 +469,10 @@ adminRouter.get(
       [bookingId],
       { label: "admin.conversation.ticket" },
     );
+    // Private messages are only opened for a support case on this booking.
+    if (!ticket) {
+      throw apiError("FORBIDDEN", { message: "This conversation can only be opened from a support ticket on the booking." });
+    }
     const conversation = await bookingConversation(bookingId);
     const threadId = (conversation as { threadId?: string | null } | null)?.threadId ?? null;
     if (ticket && threadId) {

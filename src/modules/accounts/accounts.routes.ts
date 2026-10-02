@@ -346,9 +346,8 @@ accountsRouter.post(
 
     return ok(res, {
       message: "If an account uses that address, a 4-digit code is on its way.",
-      // Outside production the code is returned so the flow is testable
-      // before an email provider is connected.
-      ...(isProduction || !issued ? {} : { devCode: issued.code, expiresAt: issued.expiresAt }),
+      // The code is ONLY ever delivered by email. Never return it here:
+      // that would let anyone reset any account's password.
     });
   }),
 );

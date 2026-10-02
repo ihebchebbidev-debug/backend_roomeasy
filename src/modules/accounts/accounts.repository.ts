@@ -31,6 +31,7 @@ export type AccountDto = {
     responseRate: number | null;
     payoutsOnboarded: boolean;
   } | null;
+  verificationStatus: "none" | "pending" | "verified" | "rejected";
 };
 
 type AccountRow = {
@@ -54,6 +55,7 @@ type AccountRow = {
   bio: string | null;
   response_rate: string | null;
   payouts_onboarded: boolean | null;
+  verification_status: "none" | "pending" | "verified" | "rejected" | null;
 };
 
 const accountSelect = `
@@ -61,7 +63,8 @@ const accountSelect = `
          u.locale, u.currency, u.two_factor_enabled, u.joined_on, u.last_login_at,
          coalesce(array_agg(DISTINCT g.role) FILTER (WHERE g.role IS NOT NULL), '{}')::text[] AS roles,
          h.display_name AS host_display_name, h.hosting_since, h.superhost, h.bio,
-         h.response_rate, h.payouts_onboarded
+         h.response_rate, h.payouts_onboarded,
+         (SELECT v.status::text FROM identity_verification v WHERE v.user_id = u.id LIMIT 1) AS verification_status
     FROM app_user u
     LEFT JOIN user_role_grant g ON g.user_id = u.id
     LEFT JOIN host_profile h    ON h.user_id = u.id
@@ -85,6 +88,7 @@ export function mapAccount(row: AccountRow): AccountDto {
     roles: (row.roles?.length ? row.roles : ["guest"]) as Role[],
     joinedOn: typeof row.joined_on === "string" ? row.joined_on : row.joined_on.toISOString().slice(0, 10),
     lastLoginAt: row.last_login_at ? row.last_login_at.toISOString() : null,
+    verificationStatus: row.verification_status ?? "none",
     host: row.host_display_name
       ? {
           displayName: row.host_display_name,
@@ -464,6 +468,9 @@ export async function createPasswordResetCode(
  * Trades a correct 4-digit code for a single-use ticket. The ticket is what the
  * "choose a new password" step sends back, so the code never travels twice.
  */
+const MAX_RESET_GUESSES = 5;
+const resetFailures = new Map<string, number>();
+
 export async function exchangeResetCodeForTicket(
   email: string,
   code: string,
@@ -486,8 +493,23 @@ export async function exchangeResetCodeForTicket(
     [user.id, hashCode(user.id, code), hashToken(ticket)],
     { label: "accounts.exchangeResetCode" },
   );
-  if (!updated) throw apiError("RESET_TOKEN_INVALID");
+  if (!updated) {
+    // Per-account guess limit (independent of IP): after 5 wrong codes the
+    // active code is burned and a new one must be requested by email.
+    const key = user.id;
+    const failures = (resetFailures.get(key) ?? 0) + 1;
+    if (failures >= MAX_RESET_GUESSES) {
+      resetFailures.delete(key);
+      await query(`UPDATE password_reset_token SET used_at = now() WHERE user_id = $1 AND used_at IS NULL`, [user.id], {
+        label: "accounts.burnResetCodes",
+      });
+    } else {
+      resetFailures.set(key, failures);
+    }
+    throw apiError("RESET_TOKEN_INVALID");
+  }
 
+  resetFailures.delete(user.id);
   return { token: ticket, expiresAt: updated.expires_at.toISOString() };
 }
 

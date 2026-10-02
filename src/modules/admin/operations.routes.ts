@@ -6,7 +6,7 @@ import { asyncHandler, created, ok } from "@/core/http.js";
 import { validateBody, validateParams, validateQuery } from "@/core/validate.js";
 import { sendXlsx } from "@/core/xlsx.js";
 import { currentUser } from "@/middleware/auth.js";
-import { requireCapability } from "@/middleware/permissions.js";
+import { hasCapability, requireCapability, type Capability } from "@/middleware/permissions.js";
 import { adminInsights, adminReports, setListingSuspended, setUserSuspended } from "@/modules/admin/admin.repository.js";
 import { recordModeration } from "@/modules/admin/moderation.repository.js";
 import { listNotifications, notificationCounts, queueNotification } from "@/modules/admin/notifications.repository.js";
@@ -553,6 +553,15 @@ adminOperationsRouter.post(
       req,
     );
     const admin = currentUser(req);
+    // Each action also needs the capability it would require on its own page.
+    const needed: Capability =
+      input.action === "suspend_member" ? "users.manage" : input.action === "refund_booking" ? "finance.manage" : "bookings.manage";
+    if (!hasCapability(admin.roles, needed)) {
+      throw apiError("FORBIDDEN", {
+        message: "Your administrator role does not allow this action.",
+        details: { required: needed },
+      });
+    }
     const ticket = await getTicket(ticketId);
 
     let note: string;
