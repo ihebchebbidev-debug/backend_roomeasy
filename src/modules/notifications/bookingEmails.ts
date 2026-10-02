@@ -38,7 +38,7 @@ async function loadFacts(bookingId: string): Promise<BookingFacts | null> {
 async function localeOf(userId: string | null): Promise<string> {
   if (!userId) return "en";
   const row = await queryOne<{ locale: string }>("SELECT locale FROM app_user WHERE id = $1", [userId]);
-  return row?.locale ?? "en";
+  return row?.locale ?? "fr";
 }
 
 async function send(template: TemplateKey, to: "guest" | "host", facts: BookingFacts, extra: Record<string, string> = {}) {

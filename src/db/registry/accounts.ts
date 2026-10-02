@@ -37,7 +37,7 @@ export const accountTables: TableDef[] = [
       { name: "banned_reason", type: "text" },
       { name: "banned_at", type: "timestamptz" },
       { name: "avatar_url", type: "text" },
-      { name: "locale", type: "text", notNull: true, default: "'en'" },
+      { name: "locale", type: "text", notNull: true, default: "'fr'" },
       { name: "currency", type: "text", notNull: true, default: "'EUR'" },
       { name: "two_factor_enabled", type: "boolean", notNull: true, default: "false" },
       { name: "two_factor_secret", type: "text", note: "Base32 TOTP secret, set once enrolment is confirmed." },

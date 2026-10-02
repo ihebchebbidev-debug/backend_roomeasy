@@ -57,7 +57,7 @@ const COPY = {
 type Locale = keyof typeof COPY;
 
 function copyFor(locale: string) {
-  return COPY[(locale as Locale) in COPY ? (locale as Locale) : "en"];
+  return COPY[(locale as Locale) in COPY ? (locale as Locale) : "fr"];
 }
 
 function escapeHtml(value: string): string {

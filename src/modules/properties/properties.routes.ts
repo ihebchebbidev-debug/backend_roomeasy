@@ -196,6 +196,6 @@ propertiesRouter.get(
     if (input.from && input.to && input.to <= input.from) {
       throw apiError("INVALID_DATES", { issues: [{ field: "to", message: "The end date must be after the start." }] });
     }
-    return ok(res, await calendarForProperty(id, input));
+    return ok(res, await calendarForProperty(id, input, req.auth?.userId));
   }),
 );

@@ -30,6 +30,7 @@ function mapNight(row: NightRow): CalendarNight {
 export async function calendarForProperty(
   propertyId: string,
   range: { from?: string; to?: string } = {},
+  viewerId?: string,
 ): Promise<{ propertyId: string; nights: CalendarNight[]; bookedNights: string[] }> {
   const clauses = ["property_id = $1"];
   const values: unknown[] = [propertyId];
@@ -54,12 +55,20 @@ export async function calendarForProperty(
   let bookingRange = "";
   if (range.from && range.to) {
     bookingValues.push(range.from, range.to);
-    bookingRange = ` AND daterange(check_in, check_out, '[)') && daterange($2::date, $3::date, '[)')`;
+    bookingRange = ` AND daterange(b.check_in, b.check_out, '[)') && daterange($2::date, $3::date, '[)')`;
+  }
+  // The viewer's own unpaid checkout holds are released when they book again,
+  // so they must not grey out those dates in their own date picker.
+  if (viewerId) {
+    bookingValues.push(viewerId);
+    const v = `$${bookingValues.length}`;
+    bookingRange += ` AND NOT (b.guest_id = ${v} AND b.status = 'pending'
+      AND NOT EXISTS (SELECT 1 FROM payment p WHERE p.booking_id = b.id AND p.status IN ('authorized', 'paid')))`;
   }
 
   const bookings = await query<{ check_in: Date | string; check_out: Date | string }>(
-    `SELECT check_in, check_out FROM booking
-      WHERE property_id = $1 AND status IN ('pending', 'confirmed', 'completed')${bookingRange}`,
+    `SELECT b.check_in, b.check_out FROM booking b
+      WHERE b.property_id = $1 AND b.status IN ('pending', 'confirmed', 'completed')${bookingRange}`,
     bookingValues,
     { label: "calendar.bookedNights" },
   );

@@ -18,7 +18,7 @@ export async function queueNotification(entry: {
   payload?: Record<string, unknown>;
 }): Promise<void> {
   let email = entry.recipientEmail ?? null;
-  let locale = "en";
+  let locale = "fr";
 
   if (entry.recipientId) {
     const row = await queryOne<{ email: string; locale: string }>(

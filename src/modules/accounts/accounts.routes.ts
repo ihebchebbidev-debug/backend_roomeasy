@@ -135,7 +135,7 @@ accountsRouter.post(
           "",
           "The link works once and expires in 48 hours. You can still use your account while it is unverified.",
         ].join("\n"),
-        payload: { expiresAt: issued.expiresAt },
+        payload: { expiresAt: issued.expiresAt, link },
       });
       void dispatchQueuedEmails(5).catch((error) =>
         req.log.error({ err: error }, "verification email could not be sent immediately"),
@@ -407,7 +407,7 @@ accountsRouter.post(
           "",
           "The link works once and expires in 48 hours.",
         ].join("\n"),
-        payload: { expiresAt: issued.expiresAt },
+        payload: { expiresAt: issued.expiresAt, link },
       });
       void dispatchQueuedEmails(5).catch((error) =>
         req.log.error({ err: error }, "verification email could not be sent immediately"),
