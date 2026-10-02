@@ -40,7 +40,7 @@ bookingsRouter.get(
   "/availability",
   asyncHandler(async (req, res) => {
     const input = validateQuery(rangeSchema, req);
-    return ok(res, await checkAvailability(input));
+    return ok(res, await checkAvailability({ ...input, viewerId: req.auth?.userId ?? null }));
   }),
 );
 

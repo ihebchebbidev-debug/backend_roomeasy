@@ -322,6 +322,8 @@ export async function checkAvailability(input: {
   to: string;
   guests?: number;
   ignoreBookingId?: string;
+  /** The signed-in guest: their own unpaid holds are released when they book again, so they do not count here. */
+  viewerId?: string | null;
   client?: PoolClient;
 }): Promise<AvailabilityResult> {
   // Release nights held by bookings that were never paid before reading the
@@ -358,8 +360,10 @@ export async function checkAvailability(input: {
       WHERE property_id = $1
         AND status IN ('pending', 'confirmed', 'completed')
         AND ($4::text IS NULL OR id <> $4)
+        AND NOT ($5::uuid IS NOT NULL AND guest_id = $5::uuid AND status = 'pending'
+                 AND NOT EXISTS (SELECT 1 FROM payment p WHERE p.booking_id = booking.id AND p.status IN ('authorized', 'paid')))
         AND daterange(check_in, check_out, '[)') && daterange($2::date, $3::date, '[)')`,
-    [input.propertyId, input.from, input.to, input.ignoreBookingId ?? null],
+    [input.propertyId, input.from, input.to, input.ignoreBookingId ?? null, input.viewerId ?? null],
     { client: input.client, label: "bookings.conflicts" },
   );
   if (conflicts.length) reasons.push("Another booking already covers some of those nights.");
