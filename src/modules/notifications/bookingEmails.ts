@@ -70,7 +70,14 @@ async function send(template: TemplateKey, to: "guest" | "host", facts: BookingF
 /** Queues booking lifecycle emails. Never throws — an email must not break a booking. */
 export async function notifyBookingEvent(
   bookingId: string,
-  event: "created" | "confirmed" | "declined" | "cancelled_by_guest" | "cancelled_by_host" | "cancelled_by_system",
+  event:
+    | "created"
+    | "confirmed"
+    | "declined"
+    | "cancelled_by_guest"
+    | "cancelled_by_host"
+    | "cancelled_by_system"
+    | "cancelled_by_admin",
 ): Promise<void> {
   try {
     const facts = await loadFacts(bookingId);
@@ -88,13 +95,20 @@ export async function notifyBookingEvent(
         await send("booking_declined_guest", "guest", facts);
         break;
       case "cancelled_by_guest":
+        await send("booking_cancelled_by_guest", "guest", facts);
         await send("booking_cancelled_by_guest", "host", facts);
         break;
       case "cancelled_by_host":
         await send("booking_cancelled_by_host", "guest", facts);
+        await send("booking_cancelled_by_host", "host", facts);
         break;
       case "cancelled_by_system":
         await send("booking_cancelled_by_system", "guest", facts);
+        await send("booking_cancelled_by_system", "host", facts);
+        break;
+      case "cancelled_by_admin":
+        await send("booking_cancelled_by_admin", "guest", facts);
+        await send("booking_cancelled_by_admin", "host", facts);
         break;
     }
   } catch (error) {

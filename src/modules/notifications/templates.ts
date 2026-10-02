@@ -43,7 +43,8 @@ export type TemplateKey =
   | "booking_cancelled_by_guest"
   | "booking_cancelled_by_host"
   | "booking_cancelled_by_system"
-  | "new_message";
+  | "new_message"
+  | "account_deleted";
 
 export type TemplateData = Record<string, string | number | null | undefined>;
 
@@ -238,6 +239,13 @@ const CATALOGUE: Record<TemplateKey, TemplateEntry> = {
     es: { subject: "La reserva {{reference}} fue cancelada", body: "La reserva {{reference}} para {{stayName}} ({{checkIn}} → {{checkOut}}) fue cancelada automáticamente. Reembolso: {{refundUsd}} USD.\n\nVer la reserva: {{link}}" },
     de: { subject: "Buchung {{reference}} wurde storniert", body: "Die Buchung {{reference}} für {{stayName}} ({{checkIn}} → {{checkOut}}) wurde automatisch storniert. Erstattung: {{refundUsd}} USD.\n\nBuchung ansehen: {{link}}" },
     pt: { subject: "A reserva {{reference}} foi cancelada", body: "A reserva {{reference}} para {{stayName}} ({{checkIn}} → {{checkOut}}) foi cancelada automaticamente. Reembolso: {{refundUsd}} USD.\n\nVer a reserva: {{link}}" },
+  },
+  account_deleted: {
+    en: { subject: "Your {{appName}} account has been deleted", body: "Hi {{fullName}}, this confirms your {{appName}} account and personal data have been permanently deleted, as you requested. If you did not request this, please contact support immediately." },
+    fr: { subject: "Votre compte {{appName}} a été supprimé", body: "Bonjour {{fullName}}, nous confirmons que votre compte {{appName}} et vos données personnelles ont été supprimés définitivement, comme vous l'avez demandé. Si vous n'êtes pas à l'origine de cette demande, contactez immédiatement le support." },
+    es: { subject: "Tu cuenta de {{appName}} ha sido eliminada", body: "Hola {{fullName}}, confirmamos que tu cuenta de {{appName}} y tus datos personales se han eliminado de forma permanente, tal como solicitaste. Si no fuiste tú quien lo solicitó, contacta con soporte de inmediato." },
+    de: { subject: "Ihr {{appName}}-Konto wurde gelöscht", body: "Hallo {{fullName}}, hiermit bestätigen wir, dass Ihr {{appName}}-Konto und Ihre persönlichen Daten wie von Ihnen gewünscht dauerhaft gelöscht wurden. Falls Sie dies nicht veranlasst haben, wenden Sie sich bitte sofort an den Support." },
+    pt: { subject: "A sua conta {{appName}} foi eliminada", body: "Olá {{fullName}}, confirmamos que a sua conta {{appName}} e os seus dados pessoais foram eliminados permanentemente, conforme solicitado. Se não foi você quem pediu isto, contacte o suporte imediatamente." },
   },
   new_message: {
     en: { subject: "New message from {{senderName}}", body: "{{senderName}} sent you a message about {{stayName}}:\n\n\"{{excerpt}}\"\n\nReply here: {{link}}" },

@@ -15,6 +15,7 @@ export type MessageDto = {
   from: "me" | "them";
   senderRole: "guest" | "host" | "admin" | "system";
   text: string;
+  attachmentUrl: string | null;
   sentAt: string;
   time: string;
   readAt: string | null;
@@ -56,6 +57,7 @@ type MessageRow = {
   sender_id: string | null;
   sender_role: "guest" | "host" | "admin" | "system";
   body: string;
+  attachment_url: string | null;
   sent_at: Date;
   read_at: Date | null;
 };
@@ -96,6 +98,7 @@ function mapMessage(row: MessageRow, viewerId: string): MessageDto {
     from: row.sender_id && row.sender_id === viewerId ? "me" : "them",
     senderRole: row.sender_role,
     text: row.body,
+    attachmentUrl: row.attachment_url,
     sentAt: row.sent_at.toISOString(),
     time: clockOf(row.sent_at),
     readAt: row.read_at ? row.read_at.toISOString() : null,
@@ -190,7 +193,7 @@ export async function getThread(
   if (options.markRead !== false) await markThreadRead(threadId, viewerId);
 
   const messages = await query<MessageRow>(
-    `SELECT id::text, sender_id, sender_role, body, sent_at, read_at
+    `SELECT id::text, sender_id, sender_role, body, attachment_url, sent_at, read_at
        FROM message WHERE thread_id = $1 ORDER BY sent_at, id`,
     [threadId],
     { label: "messaging.listMessages" },
@@ -243,7 +246,10 @@ export async function ensureThread(input: {
     { label: "messaging.findThread" },
   );
   if (existing) {
-    if (input.bookingId && !existing.booking_id) {
+    // A guest can have several bookings for the same listing over time (e.g. one
+    // cancelled, one new). Keep the thread pointed at whichever booking the
+    // caller is currently acting on instead of a stale, possibly cancelled one.
+    if (input.bookingId && existing.booking_id !== input.bookingId) {
       await query(`UPDATE message_thread SET booking_id = $2, updated_at = now() WHERE id = $1`, [
         existing.id,
         input.bookingId,
@@ -270,10 +276,29 @@ export async function ensureThread(input: {
 }
 
 /** Posts a message. The sender must be a participant and the thread must be open. */
+const MAX_ATTACHMENT_BYTES = 6 * 1024 * 1024;
+
+/** Accepts a `data:image/...;base64,` photo and makes sure it is small enough to store. */
+function validateAttachment(attachmentUrl: string): string {
+  const match = /^data:(image\/(?:jpeg|png|webp|gif));base64,([A-Za-z0-9+/=]+)$/.exec(attachmentUrl);
+  if (!match) {
+    throw apiError("UNSUPPORTED_MEDIA_TYPE", { message: "Attach a JPEG, PNG, GIF or WebP photo." });
+  }
+  const byteLength = Math.ceil((match[2]?.length ?? 0) * 0.75);
+  if (!byteLength) {
+    throw apiError("UNSUPPORTED_MEDIA_TYPE", { message: "That photo could not be read." });
+  }
+  if (byteLength > MAX_ATTACHMENT_BYTES) {
+    throw apiError("PAYLOAD_TOO_LARGE", { message: "Keep attachments under 6 MB." });
+  }
+  return attachmentUrl;
+}
+
 export async function sendMessage(input: {
   threadId: string;
   senderId: string;
   body: string;
+  attachmentUrl?: string | null;
   isAdmin?: boolean;
 }): Promise<MessageDto> {
   const thread = await loadThreadRow(input.threadId, input.senderId, input.isAdmin === true);
@@ -286,7 +311,8 @@ export async function sendMessage(input: {
   }
 
   const body = input.body.trim();
-  if (!body) {
+  const attachmentUrl = input.attachmentUrl ? validateAttachment(input.attachmentUrl) : null;
+  if (!body && !attachmentUrl) {
     throw apiError("VALIDATION_FAILED", {
       message: "Write something before sending.",
       issues: [{ field: "body", message: "The message cannot be empty." }],
@@ -298,10 +324,10 @@ export async function sendMessage(input: {
 
   const message = await transaction(async (client) => {
     const row = await queryOne<MessageRow>(
-      `INSERT INTO message (thread_id, sender_id, sender_role, body)
-       VALUES ($1, $2, $3::actor_role, $4)
-       RETURNING id::text, sender_id, sender_role, body, sent_at, read_at`,
-      [input.threadId, input.senderId, senderRole, body],
+      `INSERT INTO message (thread_id, sender_id, sender_role, body, attachment_url)
+       VALUES ($1, $2, $3::actor_role, $4, $5)
+       RETURNING id::text, sender_id, sender_role, body, attachment_url, sent_at, read_at`,
+      [input.threadId, input.senderId, senderRole, body, attachmentUrl],
       { client, label: "messaging.insertMessage" },
     );
 
@@ -317,7 +343,13 @@ export async function sendMessage(input: {
   const stay = thread.property_id
     ? await queryOne<{ name: string }>("SELECT name FROM property WHERE id = $1", [thread.property_id])
     : null;
-  void notifyNewMessage({ recipientId, senderName, stayName: stay?.name ?? "RoomEasy", body, threadId: input.threadId });
+  void notifyNewMessage({
+    recipientId,
+    senderName,
+    stayName: stay?.name ?? "RoomEasy",
+    body: body || "📷 Photo",
+    threadId: input.threadId,
+  });
   return message;
 }
 
@@ -331,6 +363,42 @@ export async function startConversation(input: {
   const thread = await ensureThread(input);
   await sendMessage({ threadId: thread.id, senderId: input.guestId, body: input.body });
   return getThread(thread.id, input.guestId, { markRead: false });
+}
+
+/** Opens (or creates) the conversation for a listing without posting any message yet. */
+export async function openThread(input: {
+  propertyId: string;
+  guestId: string;
+  bookingId?: string | null;
+}): Promise<ThreadDto> {
+  const thread = await ensureThread(input);
+  return getThread(thread.id, input.guestId, { markRead: false });
+}
+
+/**
+ * Posts the guest's checkout note as the first message of the booking's
+ * conversation. Called by the bookings module right after a booking is
+ * created; failures here must never block the booking itself.
+ */
+export async function postBookingNote(input: {
+  bookingId: string;
+  propertyId: string;
+  guestId: string;
+  note?: string | null;
+}): Promise<void> {
+  const note = input.note?.trim();
+  if (!note) return;
+  try {
+    const thread = await ensureThread({
+      propertyId: input.propertyId,
+      guestId: input.guestId,
+      bookingId: input.bookingId,
+    });
+    await sendMessage({ threadId: thread.id, senderId: input.guestId, body: note });
+  } catch (error) {
+    // Best effort: a missed note should not surface as a booking failure.
+    console.error("messaging.postBookingNote failed", error);
+  }
 }
 
 /** Closes or reopens a conversation. Either participant (or an admin) may do it. */

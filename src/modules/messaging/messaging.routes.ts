@@ -8,6 +8,7 @@ import {
   getThread,
   listThreads,
   markThreadRead,
+  openThread,
   sendMessage,
   setThreadClosed,
   startConversation,
@@ -21,7 +22,8 @@ messagingRouter.use(requireAuth);
 const threadParams = z.object({ threadId: z.string().trim().min(1).max(140) });
 
 const bodySchema = z.object({
-  body: z.string().trim().min(1, "Write something before sending.").max(4000, "Keep a message under 4000 characters."),
+  body: z.string().trim().max(4000, "Keep a message under 4000 characters.").default(""),
+  attachmentUrl: z.string().trim().max(9_000_000, "The attachment is too large.").optional(),
 });
 
 /** Inbox: every conversation the caller belongs to. */
@@ -59,6 +61,23 @@ messagingRouter.get(
   }),
 );
 
+/** Open (or create) the conversation about a listing without sending any message. */
+messagingRouter.post(
+  "/threads/open",
+  asyncHandler(async (req, res) => {
+    const input = validateBody(
+      z.object({
+        propertyId: z.string().trim().min(1).max(120),
+        bookingId: z.string().trim().max(140).optional(),
+      }),
+      req,
+    );
+    const user = currentUser(req);
+    const thread = await openThread({ propertyId: input.propertyId, guestId: user.userId, bookingId: input.bookingId ?? null });
+    return ok(res, thread);
+  }),
+);
+
 /** Start (or reuse) the conversation about a listing and post the first message. */
 messagingRouter.post(
   "/threads",
@@ -67,7 +86,7 @@ messagingRouter.post(
       z.object({
         propertyId: z.string().trim().min(1).max(120),
         bookingId: z.string().trim().max(140).optional(),
-        body: bodySchema.shape.body,
+        body: z.string().trim().min(1, "Write something before sending.").max(4000, "Keep a message under 4000 characters."),
       }),
       req,
     );
@@ -87,9 +106,9 @@ messagingRouter.post(
   "/threads/:threadId/messages",
   asyncHandler(async (req, res) => {
     const { threadId } = validateParams(threadParams, req);
-    const { body } = validateBody(bodySchema, req);
+    const { body, attachmentUrl } = validateBody(bodySchema, req);
     const user = currentUser(req);
-    const message = await sendMessage({ threadId, senderId: user.userId, body, isAdmin: isAdmin(req) });
+    const message = await sendMessage({ threadId, senderId: user.userId, body, attachmentUrl, isAdmin: isAdmin(req) });
     req.log.info({ threadId, messageId: message.id }, "message sent");
     return created(res, message);
   }),

@@ -29,6 +29,7 @@ import {
 } from "@/modules/admin/finance.repository.js";
 import { renderInvoicePdf } from "@/modules/admin/invoice.pdf.js";
 import { dispatchQueuedEmails, requeueNotification } from "@/modules/notifications/dispatcher.js";
+import { notifyBookingEvent } from "@/modules/notifications/bookingEmails.js";
 import { mailerStatus, verifyMailer } from "@/modules/notifications/mailer.js";
 import { stripeStatus } from "@/modules/payments/stripe.client.js";
 import { listListingReports, setReportStatus } from "@/modules/admin/reports.repository.js";
@@ -324,16 +325,7 @@ adminOperationsRouter.post(
       reason,
       metadata: { refundPercent, refundUsd: result.refundUsd },
     });
-    if (result.guestId) {
-      await queueNotification({
-        recipientId: result.guestId,
-        recipientEmail: result.guestEmail,
-        template: "booking_cancelled_by_admin",
-        subject: `Booking ${result.reference} has been cancelled`,
-        body: `An administrator cancelled your booking. Reason: ${reason}. Refund: ${result.refundUsd} USD.`,
-        payload: { bookingId, refundUsd: result.refundUsd },
-      });
-    }
+    void notifyBookingEvent(bookingId, "cancelled_by_admin");
     req.log.warn({ bookingId, reason, refundPercent }, "booking cancelled by admin");
     return ok(res, result);
   }),

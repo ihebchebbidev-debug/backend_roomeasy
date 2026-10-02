@@ -33,7 +33,7 @@ export type PropertyDto = {
   tags: string[];
   image: string | null;
   gallery: string[];
-  host: { id: string | null; name: string | null; avatarUrl: string | null; since: number | null; superhost: boolean } | null;
+  host: { id: string | null; name: string | null; avatarUrl: string | null; since: number | null; superhost: boolean; verified: boolean } | null;
   listing: {
     id: string;
     status: string;
@@ -83,6 +83,7 @@ type PropertyRow = {
   host_avatar: string | null;
   hosting_since: number | null;
   host_superhost: boolean | null;
+  host_verified: boolean | null;
   listing_id: string | null;
   listing_status: string | null;
   listing_approved: boolean | null;
@@ -143,6 +144,7 @@ export function mapProperty(row: PropertyRow): PropertyDto {
            avatarUrl: row.host_avatar,
           since: row.hosting_since,
           superhost: row.host_superhost === true,
+          verified: row.host_verified === true,
         }
       : null,
     listing: row.listing_id
@@ -172,6 +174,7 @@ const selectProperty = (localeParam: string) => `
           hu.avatar_url AS host_avatar,
          h.hosting_since,
          h.superhost   AS host_superhost,
+         hu.verified   AS host_verified,
          l.id      AS listing_id,
          l.status  AS listing_status,
          l.approved AS listing_approved,

@@ -13,6 +13,7 @@ import { calendarMap } from "@/modules/listings/calendar.repository.js";
 import { capturePaymentForBooking, refundThroughStripe } from "@/modules/payments/refunds.js";
 
 import { notifyBookingEvent } from "@/modules/notifications/bookingEmails.js";
+import { postBookingNote } from "@/modules/messaging/messaging.repository.js";
 import { getRates } from "@/modules/currency/currency.repository.js";
 import { getHostRateRules, getPlatformSettings } from "@/modules/settings/settings.repository.js";
 
@@ -672,7 +673,18 @@ export async function createBooking(input: {
   }, "bookings.create");
 
   const created = mapBooking(row);
-  void notifyBookingEvent(created.id, "created");
+  // Best-effort: the guest's checkout note becomes the first message of the
+  // booking's conversation. A failure here must never fail the booking.
+  if (created.guestId) {
+    void postBookingNote({
+      bookingId: created.id,
+      propertyId: created.propertyId,
+      guestId: created.guestId,
+      note: input.message,
+    });
+  }
+  // No email yet: the booking is still unpaid. The "request sent" email is
+  // queued once Stripe confirms the payment (see payments.webhook.ts).
   return created;
 }
 
@@ -1102,7 +1114,7 @@ export async function cancelBooking(input: {
     return updated!;
   }, "bookings.cancel");
 
-  if (input.actorRole !== "admin") void notifyBookingEvent(booking.id, `cancelled_by_${input.actorRole}`);
+  void notifyBookingEvent(booking.id, `cancelled_by_${input.actorRole}`);
   return { ...mapBooking(row), refund: { percent: refund.percent, amountUsd: refund.amountUsd } };
 }
 

@@ -5,6 +5,8 @@ import bcrypt from "bcryptjs";
 import { env } from "@/config/env.js";
 import { apiError } from "@/core/errors.js";
 import { query, queryOne, transaction } from "@/db/query.js";
+import { queueNotification } from "@/modules/admin/notifications.repository.js";
+import { dispatchQueuedEmails } from "@/modules/notifications/dispatcher.js";
 import type { Role } from "@/middleware/auth.js";
 
 /** Public account shape returned to the app (never contains the password hash). */
@@ -245,6 +247,18 @@ export async function updateProfile(
     { label: "accounts.updateProfile" },
   );
 
+  if (patch.fullName) {
+    // Keep "Hosted by ..." on listings in step with a rename: the public
+    // display name was only ever seeded from the full name, so it should
+    // follow it unless the host set something different on their own.
+    await query(
+      `UPDATE host_profile SET display_name = $2, updated_at = now()
+         WHERE user_id = $1`,
+      [userId, patch.fullName],
+      { label: "accounts.syncHostDisplayName" },
+    );
+  }
+
   const account = await findAccountById(userId);
   if (!account) throw apiError("NOT_FOUND", { message: "This account no longer exists." });
   return account;
@@ -300,7 +314,10 @@ export async function changePassword(userId: string, currentPassword: string, ne
 
   const matches = await bcrypt.compare(currentPassword, row.password_hash);
   if (!matches) {
-    throw apiError("INVALID_CREDENTIALS", {
+    // 400, not 401: a wrong *current* password is a validation mistake on an
+    // otherwise valid, still-authenticated session — it must never look like
+    // an expired/invalid token to the client's 401 handling.
+    throw apiError("INVALID_CURRENT_PASSWORD", {
       message: "The current password is incorrect.",
       issues: [{ field: "currentPassword", message: "The current password is incorrect." }],
     });
@@ -695,6 +712,18 @@ export async function deleteOwnAccount(input: {
 
     return updated?.deleted_at ?? new Date();
   }, "accounts.deleteOwnAccount");
+
+  // Confirm the erasure using the pre-anonymisation contact details — once
+  // this transaction commits, the account row no longer carries them.
+  await queueNotification({
+    recipientId: row.id,
+    recipientEmail: row.email,
+    template: "account_deleted",
+    subject: `Your ${env.APP_NAME} account has been deleted`,
+    body: `Hi ${row.full_name}, this confirms your ${env.APP_NAME} account and personal data have been permanently deleted, as you requested. If you did not request this, please contact support immediately.`,
+    payload: { fullName: row.full_name, appName: env.APP_NAME },
+  });
+  void dispatchQueuedEmails(5).catch(() => {});
 
   return { deletedAt: deletedAt.toISOString() };
 }

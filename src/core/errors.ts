@@ -25,6 +25,7 @@ export const errorCatalogue = {
   // --- auth & access ---------------------------------------------------------
   UNAUTHENTICATED: { status: 401, message: "Sign in to continue." },
   INVALID_CREDENTIALS: { status: 401, message: "Email or password is incorrect." },
+  INVALID_CURRENT_PASSWORD: { status: 400, message: "The current password is incorrect." },
   TOKEN_EXPIRED: { status: 401, message: "Your session has expired. Sign in again." },
   TOKEN_INVALID: { status: 401, message: "Your session token is not valid." },
   FORBIDDEN: { status: 403, message: "You do not have access to this resource." },
