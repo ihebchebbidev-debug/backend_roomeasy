@@ -246,7 +246,7 @@ export async function listVerifications(options: { limit: number; offset: number
       WHERE u.deleted_at IS NULL
         AND ($3::verification_status IS NULL OR v.status = $3::verification_status)
         AND ($3::verification_status IS NOT NULL OR v.user_id IS NOT NULL OR u.verified = false)
-      ORDER BY coalesce(v.updated_at, u.created_at) DESC
+      ORDER BY (v.status = 'pending' AND v.document_kind IS NOT NULL) DESC NULLS LAST, coalesce(v.updated_at, u.created_at) DESC
       LIMIT $1 OFFSET $2`,
     [options.limit, options.offset, options.status ?? null],
     { label: "adminOps.listVerifications" },
