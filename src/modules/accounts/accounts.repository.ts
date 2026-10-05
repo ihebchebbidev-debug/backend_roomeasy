@@ -226,19 +226,27 @@ export async function updateProfile(
     twoFactorEnabled?: boolean;
   },
 ): Promise<AccountDto> {
+  // `phone` is intentionally not coalesced: an explicit "" or null in the
+  // patch means "clear the stored number", while `undefined` (the field was
+  // never sent) must leave it untouched. Using coalesce($3, phone) here would
+  // silently keep the old number whenever the patch clears it to "".
+  const phoneProvided = Object.prototype.hasOwnProperty.call(patch, "phone");
+  const nextPhone = patch.phone === "" ? null : (patch.phone ?? null);
+
   await query(
     `UPDATE app_user SET
        full_name          = coalesce($2, full_name),
-       phone              = coalesce($3, phone),
-       avatar_url         = coalesce($4, avatar_url),
-       locale             = coalesce($5, locale),
-       currency           = coalesce($6, currency),
-       two_factor_enabled = coalesce($7, two_factor_enabled)
+       phone              = CASE WHEN $3 THEN $4 ELSE phone END,
+       avatar_url         = coalesce($5, avatar_url),
+       locale             = coalesce($6, locale),
+       currency           = coalesce($7, currency),
+       two_factor_enabled = coalesce($8, two_factor_enabled)
      WHERE id = $1`,
     [
       userId,
       patch.fullName ?? null,
-      patch.phone ?? null,
+      phoneProvided,
+      nextPhone,
       patch.avatarUrl ?? null,
       patch.locale ?? null,
       patch.currency ?? null,

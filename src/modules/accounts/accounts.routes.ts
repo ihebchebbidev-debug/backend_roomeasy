@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { SUPPORTED_CURRENCIES } from "@/modules/currency/currency.repository.js";
 import { z } from "zod";
 
 import { apiError } from "@/core/errors.js";
@@ -43,13 +44,21 @@ import { otpauthUrl } from "@/core/totp.js";
 
 export const accountsRouter = Router();
 
+// Only currencies the site can actually convert; anything else would show
+// prices unconverted under a made-up label.
+const currencyField = z
+  .string()
+  .trim()
+  .transform((value) => value.toUpperCase())
+  .pipe(z.enum(SUPPORTED_CURRENCIES as unknown as [string, ...string[]], { message: "Choose a supported currency." }));
+
 const signupSchema = z.object({
   fullName: z.string().trim().min(2, "Enter your full name.").max(120),
   email: emailField,
   password: passwordField,
   phone: z.string().trim().max(40).optional(),
   locale: z.enum(["en", "fr", "es", "de", "pt"]).optional(),
-  currency: z.string().trim().length(3).optional(),
+  currency: currencyField.optional(),
   /** A host signs up straight from "List your place". */
   asHost: z.boolean().optional(),
 });
@@ -65,7 +74,7 @@ const profileSchema = z
     fullName: z.string().trim().min(2).max(120).optional(),
     phone: z.string().trim().max(40).nullable().optional(),
     locale: z.enum(["en", "fr", "es", "de", "pt"]).optional(),
-    currency: z.string().trim().length(3).optional(),
+    currency: currencyField.optional(),
   })
   .refine((value) => Object.keys(value).length > 0, "Send at least one field to change.");
 
@@ -103,6 +112,13 @@ function session(account: AccountDto) {
 }
 
 const authLimiter = rateLimit({ windowMs: 15 * 60_000, max: 30, name: "auth" });
+// Counted per e-mail address as well, so guessing one account's password from
+// many internet addresses is still capped.
+const loginEmailLimiter = rateLimit({ windowMs: 15 * 60_000, max: 10, name: "login-email", by: "email" });
+const resetEmailLimiter = rateLimit({ windowMs: 15 * 60_000, max: 5, name: "reset-email", by: "email" });
+const resetCodeEmailLimiter = rateLimit({ windowMs: 15 * 60_000, max: 8, name: "reset-code-email", by: "email" });
+// Per account for signed-in actions (password change, account deletion).
+const accountLimiter = rateLimit({ windowMs: 15 * 60_000, max: 10, name: "account-sensitive", by: "user" });
 
 accountsRouter.post(
   "/signup",
@@ -149,6 +165,7 @@ accountsRouter.post(
 accountsRouter.post(
   "/login",
   authLimiter,
+  loginEmailLimiter,
   asyncHandler(async (req, res) => {
     const body = validateBody(loginSchema, req);
     const account = await verifyCredentials(body.email, body.password);
@@ -195,7 +212,7 @@ accountsRouter.patch(
 accountsRouter.put(
   "/me/avatar",
   requireAuth,
-  rateLimit({ windowMs: 60_000, max: 10, name: "avatar-upload" }),
+  rateLimit({ windowMs: 60_000, max: 10, name: "avatar-upload", by: "user" }),
   asyncHandler(async (req, res) => {
     const { dataUrl } = validateBody(avatarSchema, req);
     return ok(res, await saveAvatar(currentUser(req).userId, decodeAvatar(dataUrl)));
@@ -225,6 +242,7 @@ accountsRouter.post(
   "/me/password",
   requireAuth,
   authLimiter,
+  accountLimiter,
   asyncHandler(async (req, res) => {
     const body = validateBody(
       z.object({ currentPassword: z.string().min(1, "Enter your current password."), newPassword: passwordField }),
@@ -289,6 +307,7 @@ accountsRouter.delete(
   "/me",
   requireAuth,
   authLimiter,
+  accountLimiter,
   asyncHandler(async (req, res) => {
     const body = validateBody(
       z.object({
@@ -314,6 +333,7 @@ accountsRouter.get(
 accountsRouter.post(
   "/forgot-password",
   rateLimit({ windowMs: 15 * 60_000, max: 10, name: "forgot-password" }),
+  resetEmailLimiter,
   asyncHandler(async (req, res) => {
     const body = validateBody(z.object({ email: emailField }), req);
     const issued = await createPasswordResetCode(body.email, req.ip ?? null);
@@ -356,6 +376,7 @@ accountsRouter.post(
 accountsRouter.post(
   "/verify-reset-code",
   rateLimit({ windowMs: 15 * 60_000, max: 10, name: "verify-reset-code" }),
+  resetCodeEmailLimiter,
   asyncHandler(async (req, res) => {
     const body = validateBody(
       z.object({
@@ -392,6 +413,7 @@ accountsRouter.post(
 accountsRouter.post(
   "/resend-verification",
   rateLimit({ windowMs: 15 * 60_000, max: 5, name: "resend-verification" }),
+  rateLimit({ windowMs: 60 * 60_000, max: 5, name: "resend-verification-email", by: "email" }),
   asyncHandler(async (req, res) => {
     const body = validateBody(z.object({ email: emailField }), req);
     const issued = await createEmailVerificationTokenForEmail(body.email);

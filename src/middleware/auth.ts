@@ -67,13 +67,24 @@ async function contextFromToken(token: string, req: Request): Promise<AuthContex
   return context;
 }
 
-/** Attaches `req.auth` when a valid token is present; never rejects. */
+/**
+ * Attaches `req.auth` when a valid token is present; never rejects. An expired
+ * or invalid token is treated as an anonymous visitor, so public pages keep
+ * working; routes behind `requireAuth` still answer 401 so the app can refresh.
+ */
 export const authenticate: RequestHandler = (req, _res, next) => {
   const token = readToken(req);
   if (!token) return next();
   contextFromToken(token, req)
     .then(() => next())
-    .catch(next);
+    .catch((error: unknown) => {
+      const code = (error as { code?: string } | null)?.code;
+      if (code === "TOKEN_EXPIRED" || code === "TOKEN_INVALID") {
+        delete req.auth;
+        return next();
+      }
+      return next(error);
+    });
 };
 
 /**

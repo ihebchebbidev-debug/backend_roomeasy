@@ -11,6 +11,7 @@ import { computeQuote, smartRulesActive, type PriceBreakdown } from "@/domain/pr
 import { normalizeSmartRules } from "@/domain/smartPricingRules.js";
 import { calendarMap } from "@/modules/listings/calendar.repository.js";
 import { capturePaymentForBooking, refundThroughStripe } from "@/modules/payments/refunds.js";
+import { stripeClient } from "@/modules/payments/stripe.client.js";
 
 import { notifyBookingEvent } from "@/modules/notifications/bookingEmails.js";
 import { postBookingNote } from "@/modules/messaging/messaging.repository.js";
@@ -1158,7 +1159,8 @@ export async function completeFinishedStays(): Promise<number> {
  * pending and still unpaid.
  */
 export async function expireUnpaidBookings(holdMinutes = env.BOOKING_HOLD_MINUTES): Promise<number> {
-  return transaction(async (client) => {
+  const openIntents: string[] = [];
+  const count = await transaction(async (client) => {
     const expired = await query<{ id: string; reference: string; guest_id: string | null; guest_email: string | null }>(
       `UPDATE booking b
           SET status = 'cancelled', updated_at = now()
@@ -1186,14 +1188,32 @@ export async function expireUnpaidBookings(holdMinutes = env.BOOKING_HOLD_MINUTE
       { client, label: "bookings.expireUnpaid.cancellations" },
     );
 
-    await query(
-      `UPDATE payment SET status = 'failed' WHERE booking_id = ANY($1::text[]) AND status = 'pending'`,
+    const failed = await query<{ stripe_payment_intent_id: string | null }>(
+      `UPDATE payment SET status = 'failed' WHERE booking_id = ANY($1::text[]) AND status = 'pending'
+       RETURNING stripe_payment_intent_id`,
       [ids],
       { client, label: "bookings.expireUnpaid.payments" },
     );
+    for (const row of failed) if (row.stripe_payment_intent_id) openIntents.push(row.stripe_payment_intent_id);
 
     return expired.length;
   }, "bookings.expireUnpaid");
+
+  // Close the Stripe side too, so the checkout can no longer be paid. A
+  // payment that still slips through is refunded by the webhook.
+  if (openIntents.length) {
+    const stripe = stripeClient();
+    if (stripe) {
+      await Promise.all(
+        openIntents.map((id) =>
+          stripe.paymentIntents.cancel(id, { cancellation_reason: "abandoned" }).catch((error: unknown) => {
+            logger.warn({ err: error, intent: id }, "could not cancel expired payment intent");
+          }),
+        ),
+      );
+    }
+  }
+  return count;
 }
 
 let lastSweepAt = 0;

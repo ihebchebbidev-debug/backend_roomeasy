@@ -159,8 +159,17 @@ export async function hostDashboard(hostId: string, window = 90): Promise<HostDa
                              AND b.check_in <= CURRENT_DATE AND b.check_out > CURRENT_DATE)::text AS staying,
             count(*) FILTER (WHERE b.status = 'completed')::text AS completed,
             count(*) FILTER (WHERE b.status IN ('cancelled', 'declined'))::text AS cancelled,
-            coalesce(sum(b.total_usd) FILTER (WHERE b.status IN ('confirmed', 'completed')), 0)::text AS gross
+            coalesce(sum(
+              CASE WHEN b.status IN ('confirmed', 'completed') THEN b.total_usd
+                   -- Late cancellation: the host keeps whatever was not refunded.
+                   WHEN b.status = 'cancelled' AND pay.status IN ('paid', 'refunded')
+                     THEN greatest(b.total_usd - coalesce(pay.refunded_usd, 0), 0)
+                   ELSE 0 END), 0)::text AS gross
        FROM booking b JOIN property p ON p.id = b.property_id
+       LEFT JOIN LATERAL (
+         SELECT x.status::text AS status, x.refunded_usd FROM payment x
+          WHERE x.booking_id = b.id ORDER BY x.created_at DESC LIMIT 1
+       ) pay ON true
       WHERE p.host_id = $1`,
     [hostId],
     { label: "host.dashboard.bookings" },

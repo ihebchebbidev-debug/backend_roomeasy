@@ -58,9 +58,28 @@ function hitMemory(key: string, windowMs: number): Hit {
   return hit;
 }
 
-export function rateLimit(options: { windowMs: number; max: number; name: string }): RequestHandler {
+/**
+ * What a limiter counts against:
+ * - "ip" (default): the caller's internet address.
+ * - "user": the signed-in account (falls back to the address when anonymous),
+ *   so switching addresses does not reset the count.
+ * - "email": the e-mail address in the request body, so one account cannot be
+ *   targeted from many addresses. Requests without one are counted by address.
+ */
+export type RateLimitBy = "ip" | "user" | "email";
+
+function subjectKey(req: Parameters<RequestHandler>[0], by: RateLimitBy): string {
+  if (by === "user" && req.auth?.userId) return `u:${req.auth.userId}`;
+  if (by === "email") {
+    const raw = (req.body as { email?: unknown } | undefined)?.email;
+    if (typeof raw === "string" && raw.trim()) return `e:${raw.trim().toLowerCase().slice(0, 254)}`;
+  }
+  return `ip:${clientKey(req)}`;
+}
+
+export function rateLimit(options: { windowMs: number; max: number; name: string; by?: RateLimitBy }): RequestHandler {
   return (req, res, next) => {
-    const key = `${options.name}:${clientKey(req)}`;
+    const key = `${options.name}:${subjectKey(req, options.by ?? "ip")}`;
     hitStored(key, options.windowMs)
       .catch((error: unknown) => {
         logger.warn({ err: error }, "rate limit store unavailable, using memory");

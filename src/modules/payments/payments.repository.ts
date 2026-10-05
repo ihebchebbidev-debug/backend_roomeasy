@@ -1,3 +1,4 @@
+import { env } from "@/config/env.js";
 import { query, queryOne } from "@/db/query.js";
 
 export type PayableBooking = {
@@ -18,6 +19,8 @@ export type PayableBooking = {
   payoutsOnboarded: boolean;
   /** Instant-book stays confirm on payment; others need the host's answer. */
   instantBook: boolean;
+  /** Still pending and unpaid past the hold window: about to be released. */
+  holdExpired: boolean;
 };
 
 /** Everything the Stripe layer needs about one booking, in a single round trip. */
@@ -38,12 +41,17 @@ export async function payableBooking(idOrReference: string): Promise<PayableBook
     stripe_account_id: string | null;
     payouts_onboarded: boolean;
     instant_book: boolean;
+    hold_expired: boolean;
   }>(
     `SELECT b.id, b.reference, b.guest_id, b.guest_email, b.guest_name, b.status::text AS status,
             b.currency, b.total_usd, p.name AS property_name,
             hp.user_id AS host_id, hu.email AS host_email,
             COALESCE(b.commission_rate, hc.commission_rate, ps.commission_rate) AS commission_rate,
-            hp.stripe_account_id, hp.payouts_onboarded, p.instant_book
+            hp.stripe_account_id, hp.payouts_onboarded, p.instant_book,
+            (b.status = 'pending'
+              AND b.created_at < now() - ($2::int * interval '1 minute')
+              AND NOT EXISTS (SELECT 1 FROM payment pay
+                               WHERE pay.booking_id = b.id AND pay.status IN ('authorized', 'paid'))) AS hold_expired
        FROM booking b
        JOIN property p ON p.id = b.property_id
        JOIN host_profile hp ON hp.user_id = p.host_id
@@ -52,7 +60,7 @@ export async function payableBooking(idOrReference: string): Promise<PayableBook
        CROSS JOIN platform_settings ps
       WHERE b.id = $1 OR b.reference = $1
       LIMIT 1`,
-    [idOrReference],
+    [idOrReference, env.BOOKING_HOLD_MINUTES],
     { label: "payments.booking" },
   );
 
@@ -73,6 +81,7 @@ export async function payableBooking(idOrReference: string): Promise<PayableBook
     stripeAccountId: row.stripe_account_id,
     payoutsOnboarded: row.payouts_onboarded,
     instantBook: row.instant_book,
+    holdExpired: Boolean(row.hold_expired),
   };
 }
 

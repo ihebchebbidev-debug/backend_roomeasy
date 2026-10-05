@@ -62,11 +62,44 @@ export async function stripeWebhookHandler(req: Request, res: Response): Promise
   res.status(200).json({ received: true });
 }
 
+/**
+ * A payment that lands after its booking was cancelled (hold expired, guest or
+ * host cancelled) must not keep the guest's money: refund a capture, release a
+ * hold. Returns true when the payment was reversed and should not be recorded.
+ */
+async function reverseIfBookingClosed(bookingId: string, intent: Stripe.PaymentIntent): Promise<boolean> {
+  const rows = await query<{ status: string }>(
+    `SELECT status::text AS status FROM booking WHERE id = $1`,
+    [bookingId],
+    { label: "webhook.booking-status" },
+  );
+  const status = rows[0]?.status;
+  if (!status || status !== "cancelled") return false;
+  const stripe = requireStripe();
+  try {
+    if (intent.status === "requires_capture") {
+      await stripe.paymentIntents.cancel(intent.id, { cancellation_reason: "abandoned" });
+    } else if (intent.status === "succeeded") {
+      await stripe.refunds.create(
+        { payment_intent: intent.id, reason: "requested_by_customer", metadata: { bookingId, cause: "booking_cancelled" } },
+        { idempotencyKey: `late-payment-refund-${intent.id}` },
+      );
+    }
+    logger.warn({ intent: intent.id, bookingId }, "payment arrived for a cancelled booking; reversed");
+  } catch (error) {
+    // Stripe retries the webhook on a non-2xx, so surface the failure.
+    logger.error({ err: error, intent: intent.id, bookingId }, "could not reverse late payment");
+    throw error;
+  }
+  return true;
+}
+
 async function handleEvent(event: Stripe.Event): Promise<void> {
   switch (event.type) {
     case "payment_intent.succeeded": {
       const intent = event.data.object as Stripe.PaymentIntent;
       const bookingId = intent.metadata?.["bookingId"] ?? null;
+      if (bookingId && (await reverseIfBookingClosed(bookingId, intent))) break;
       const card = await cardDetails(intent);
 
       if (bookingId) {
@@ -107,6 +140,7 @@ async function handleEvent(event: Stripe.Event): Promise<void> {
     case "payment_intent.amount_capturable_updated": {
       const intent = event.data.object as Stripe.PaymentIntent;
       const bookingId = intent.metadata?.["bookingId"] ?? null;
+      if (bookingId && (await reverseIfBookingClosed(bookingId, intent))) break;
       if (bookingId) {
         const card = await cardDetails(intent);
         await recordStripePayment({

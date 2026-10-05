@@ -4,6 +4,12 @@ import { z } from "zod";
 import { asyncHandler, created, ok } from "@/core/http.js";
 import { queryBoolean, validateBody, validateParams, validateQuery } from "@/core/validate.js";
 import { currentUser, isAdmin, requireAuth } from "@/middleware/auth.js";
+import { rateLimit } from "@/middleware/rateLimit.js";
+
+// Per account, so one member cannot flood a host's inbox (photos included).
+const sendLimiter = rateLimit({ windowMs: 60_000, max: 20, name: "message-send", by: "user" });
+const sendHourlyLimiter = rateLimit({ windowMs: 60 * 60_000, max: 200, name: "message-send-hour", by: "user" });
+const openLimiter = rateLimit({ windowMs: 60 * 60_000, max: 60, name: "thread-open", by: "user" });
 import {
   getThread,
   listThreads,
@@ -64,6 +70,7 @@ messagingRouter.get(
 /** Open (or create) the conversation about a listing without sending any message. */
 messagingRouter.post(
   "/threads/open",
+  openLimiter,
   asyncHandler(async (req, res) => {
     const input = validateBody(
       z.object({
@@ -104,6 +111,8 @@ messagingRouter.post(
 
 messagingRouter.post(
   "/threads/:threadId/messages",
+  sendLimiter,
+  sendHourlyLimiter,
   asyncHandler(async (req, res) => {
     const { threadId } = validateParams(threadParams, req);
     const { body, attachmentUrl } = validateBody(bodySchema, req);

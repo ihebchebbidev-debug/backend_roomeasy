@@ -7,6 +7,7 @@ import { apiError } from "@/core/errors.js";
 import { asyncHandler, ok } from "@/core/http.js";
 import { log } from "@/core/logger.js";
 import { validateBody } from "@/core/validate.js";
+import { rateLimit } from "@/middleware/rateLimit.js";
 import { currentUser, requireAuth, requireRole } from "@/middleware/auth.js";
 import {
   attachIntentToPendingPayment,
@@ -49,6 +50,7 @@ paymentsRouter.get(
 paymentsRouter.post(
   "/intents",
   requireAuth,
+  rateLimit({ name: "payment-intent", windowMs: 15 * 60_000, max: 20, by: "user" }),
   asyncHandler(async (req, res) => {
     if (!stripeEnabled()) throw apiError("CONFLICT", { message: "Card payments are not configured yet." });
     const { bookingReference } = validateBody(z.object({ bookingReference: z.string().trim().min(3).max(120) }), req);
@@ -59,6 +61,14 @@ paymentsRouter.post(
     if (!booking) throw apiError("NOT_FOUND", { message: "That booking does not exist." });
     if (booking.guestId !== user.userId && !user.roles.includes("admin")) {
       throw apiError("FORBIDDEN");
+    }
+    // Only an unpaid booking still inside its hold can be paid. Otherwise the
+    // card would be charged for a booking that is cancelled or about to be.
+    if (booking.status !== "pending" || booking.holdExpired) {
+      throw apiError("CONFLICT", {
+        message: "This booking is no longer awaiting payment. Please start a new booking.",
+        details: { reason: "BOOKING_NOT_PAYABLE", status: booking.status },
+      });
     }
 
     const stripe = requireStripe();

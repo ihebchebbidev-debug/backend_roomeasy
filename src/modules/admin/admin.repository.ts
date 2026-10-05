@@ -59,13 +59,16 @@ export async function adminOverview(): Promise<AdminOverview> {
     commission: string;
   }>(
     `SELECT count(*) AS total,
-            count(*) FILTER (WHERE status = 'pending') AS pending,
-            count(*) FILTER (WHERE status = 'confirmed') AS confirmed,
-            count(*) FILTER (WHERE status = 'completed') AS completed,
-            count(*) FILTER (WHERE status IN ('cancelled','declined')) AS cancelled,
-            coalesce(sum(total_usd / nullif(fx_rate_to_eur, 0)) FILTER (WHERE status IN ('confirmed','completed')), 0) AS gross,
-            coalesce(sum(service_fee / nullif(fx_rate_to_eur, 0)) FILTER (WHERE status IN ('confirmed','completed')), 0) AS commission
-       FROM booking`,
+            count(*) FILTER (WHERE b.status = 'pending') AS pending,
+            count(*) FILTER (WHERE b.status = 'confirmed') AS confirmed,
+            count(*) FILTER (WHERE b.status = 'completed') AS completed,
+            count(*) FILTER (WHERE b.status IN ('cancelled','declined')) AS cancelled,
+            coalesce(sum(b.total_usd / nullif(b.fx_rate_to_eur, 0)) FILTER (WHERE b.status IN ('confirmed','completed')), 0) AS gross,
+            coalesce(sum(ROUND(b.total_usd * COALESCE(b.commission_rate, hc.commission_rate, ps.commission_rate) / 100, 2) / nullif(b.fx_rate_to_eur, 0)) FILTER (WHERE b.status IN ('confirmed','completed')), 0) AS commission
+       FROM booking b
+       JOIN property p ON p.id = b.property_id
+       LEFT JOIN host_commission hc ON hc.host_id = p.host_id
+       CROSS JOIN platform_settings ps`,
     [],
     { label: "admin.overview.bookings" },
   );
@@ -616,14 +619,18 @@ export async function hostProfile(hostId: string): Promise<AdminHostProfile> {
     status: string;
     total_usd: string;
     service_fee: string;
+    commission_rate: string;
     currency: string;
     fx_rate_to_eur: string;
   }>(
     `SELECT b.id, b.reference, b.property_id, p.name AS property_name, b.guest_name,
             b.check_in, b.check_out, b.status::text AS status, b.total_usd, b.service_fee,
+            COALESCE(b.commission_rate, hc.commission_rate, ps.commission_rate) AS commission_rate,
             b.currency, b.fx_rate_to_eur
        FROM booking b
        JOIN property p ON p.id = b.property_id
+       LEFT JOIN host_commission hc ON hc.host_id = p.host_id
+       CROSS JOIN platform_settings ps
       WHERE p.host_id = $1
       ORDER BY b.check_in DESC
       LIMIT 200`,
@@ -718,7 +725,7 @@ export async function hostProfile(hostId: string): Promise<AdminHostProfile> {
       completedBookings: bookingRows.filter((row) => row.status === "completed").length,
       cancelledBookings: bookingRows.filter((row) => row.status === "cancelled" || row.status === "declined").length,
       grossRevenueUsd: Number(earning.reduce((sum, row) => sum + Number(row.total_usd) / (Number(row.fx_rate_to_eur) || 1), 0).toFixed(2)),
-      commissionUsd: Number(earning.reduce((sum, row) => sum + Number(row.service_fee) / (Number(row.fx_rate_to_eur) || 1), 0).toFixed(2)),
+      commissionUsd: Number(earning.reduce((sum, row) => sum + Math.round(Number(row.total_usd) * Number(row.commission_rate)) / 100 / (Number(row.fx_rate_to_eur) || 1), 0).toFixed(2)),
       averageRating: visibleReviews.length ? Number((ratingSum / visibleReviews.length).toFixed(2)) : 0,
       reviews: reviewRows.length,
     },
@@ -1001,8 +1008,11 @@ export async function adminReports(months = 12): Promise<AdminReports> {
     `SELECT to_char(date_trunc('month', b.created_at), 'YYYY-MM') AS month,
             count(*) AS bookings,
             coalesce(sum(b.total_usd / nullif(b.fx_rate_to_eur, 0)) FILTER (WHERE b.status IN ('confirmed','completed')), 0) AS revenue,
-            coalesce(sum(b.service_fee / nullif(b.fx_rate_to_eur, 0)) FILTER (WHERE b.status IN ('confirmed','completed')), 0) AS commission
+            coalesce(sum(ROUND(b.total_usd * COALESCE(b.commission_rate, hc.commission_rate, ps.commission_rate) / 100, 2) / nullif(b.fx_rate_to_eur, 0)) FILTER (WHERE b.status IN ('confirmed','completed')), 0) AS commission
        FROM booking b
+       JOIN property p ON p.id = b.property_id
+       LEFT JOIN host_commission hc ON hc.host_id = p.host_id
+       CROSS JOIN platform_settings ps
       WHERE b.created_at >= date_trunc('month', now()) - make_interval(months => $1)
       GROUP BY 1 ORDER BY 1`,
     [months],
