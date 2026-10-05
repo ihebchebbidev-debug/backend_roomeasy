@@ -177,7 +177,7 @@ export type CommissionReportRow = {
 /** Commission owed per host over one period. */
 export async function commissionReport(range: { from?: string; to?: string }): Promise<CommissionReportRow[]> {
   const params: unknown[] = [];
-  const where = ledgerWhere({ ...range, limit: 0, offset: 0 }, params);
+  const where = `${ledgerWhere({ ...range, limit: 0, offset: 0 }, params)} AND b.status IN ('confirmed', 'completed')`;
 
   const rows = await query<{
     host_id: string;
@@ -270,14 +270,14 @@ export async function accountingExport(input: {
     paid_usd: string;
   }>(
     `SELECT ${bucket} AS period, b.currency,
-            COUNT(*)::text AS bookings,
-            COALESCE(SUM(b.total_usd), 0) AS revenue_usd,
-            COALESCE(SUM(b.total_usd * COALESCE(b.commission_rate, hc.commission_rate, ps.commission_rate) / 100), 0) AS commission_usd,
-            COALESCE(SUM(b.service_fee), 0) AS service_fee_usd,
-            COALESCE(SUM(b.taxes), 0) AS taxes_usd,
-            COALESCE(SUM(b.cleaning_fee), 0) AS cleaning_usd,
+            COUNT(*) FILTER (WHERE b.status IN ('confirmed', 'completed'))::text AS bookings,
+            COALESCE(SUM(b.total_usd) FILTER (WHERE b.status IN ('confirmed', 'completed')), 0) AS revenue_usd,
+            COALESCE(SUM(b.total_usd * COALESCE(b.commission_rate, hc.commission_rate, ps.commission_rate) / 100) FILTER (WHERE b.status IN ('confirmed', 'completed')), 0) AS commission_usd,
+            COALESCE(SUM(b.service_fee) FILTER (WHERE b.status IN ('confirmed', 'completed')), 0) AS service_fee_usd,
+            COALESCE(SUM(b.taxes) FILTER (WHERE b.status IN ('confirmed', 'completed')), 0) AS taxes_usd,
+            COALESCE(SUM(b.cleaning_fee) FILTER (WHERE b.status IN ('confirmed', 'completed')), 0) AS cleaning_usd,
             COALESCE(SUM(COALESCE(pay.refunded_usd, 0)), 0) AS refunded_usd,
-            COALESCE(SUM(CASE WHEN pay.status = 'paid' THEN b.total_usd ELSE 0 END), 0) AS paid_usd
+            COALESCE(SUM(CASE WHEN pay.status = 'paid' AND b.status IN ('confirmed', 'completed') THEN b.total_usd ELSE 0 END), 0) AS paid_usd
        ${BOOKING_BASE}
        ${where}
       GROUP BY period, b.currency

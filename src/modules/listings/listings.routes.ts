@@ -3,6 +3,7 @@ import { Router } from "express";
 import { z } from "zod";
 
 import { apiError } from "@/core/errors.js";
+import { queryOne } from "@/db/query.js";
 import { asyncHandler, noContent, ok } from "@/core/http.js";
 import { isoDate, validateBody, validateParams, validateQuery } from "@/core/validate.js";
 import { currentUser, isAdmin, requireRole } from "@/middleware/auth.js";
@@ -106,6 +107,22 @@ listingsRouter.put(
       throw apiError("VALIDATION_FAILED", { message: "This property type is not available.", details: { field: "category" } });
     }
     const user = currentUser(req);
+    // A first-time host must file an identity document before a new stay goes
+    // live; drafts stay allowed so the wizard never loses work.
+    if (!isAdmin(req) && !draft.listingId && draft.status === "published") {
+      const filed = await queryOne<{ ok: boolean }>(
+        `SELECT true AS ok FROM identity_verification
+          WHERE user_id = $1 AND status IN ('pending', 'verified')`,
+        [user.userId],
+        { label: "listings.identityFiled" },
+      );
+      if (!filed) {
+        throw apiError("FORBIDDEN", {
+          message: "Add an identity document before publishing your first stay.",
+          details: { reason: "identity_required" },
+        });
+      }
+    }
     await ensureHostProfile(user.userId);
 
     const saved = await saveListing({

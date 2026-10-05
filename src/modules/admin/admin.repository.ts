@@ -42,7 +42,9 @@ export async function adminOverview(): Promise<AdminOverview> {
   const listingsQ = queryOne<{ total: string; published: string; awaiting: string; suspended: string }>(
     `SELECT count(*) AS total,
             count(*) FILTER (WHERE status = 'published' AND approved) AS published,
-            count(*) FILTER (WHERE NOT approved AND status <> 'suspended') AS awaiting,
+            -- Same rows as the approvals list: listings whose stay record still exists.
+            count(*) FILTER (WHERE NOT approved AND status = 'published'
+                               AND EXISTS (SELECT 1 FROM property p WHERE p.id = listing.property_id)) AS awaiting,
             count(*) FILTER (WHERE status = 'suspended') AS suspended
        FROM listing`,
     [],
@@ -193,7 +195,7 @@ export async function listListingsForReview(options: {
   const values: unknown[] = [];
   const where: string[] = [];
 
-  if (options.scope === "pending") where.push("l.approved = false");
+  if (options.scope === "pending") where.push("l.approved = false AND l.status = 'published'");
   if (options.scope === "published") where.push("l.status = 'published' AND l.approved");
   if (options.scope === "suspended") where.push("l.status = 'suspended'");
 
