@@ -238,8 +238,9 @@ export async function listVerifications(options: { limit: number; offset: number
     notes: string | null;
     decided_at: Date | null;
     verified: boolean;
+    banned: boolean;
   }>(
-    `SELECT u.id AS user_id, u.full_name, u.email, v.status, v.document_kind, v.notes, v.decided_at, u.verified
+    `SELECT u.id AS user_id, u.full_name, u.email, v.status, v.document_kind, v.notes, v.decided_at, u.verified, coalesce(u.banned, false) AS banned
        FROM app_user u
        LEFT JOIN identity_verification v ON v.user_id = u.id
       WHERE u.deleted_at IS NULL
@@ -260,6 +261,7 @@ export async function listVerifications(options: { limit: number; offset: number
     notes: row.notes,
     decidedAt: row.decided_at?.toISOString() ?? null,
     accountVerified: row.verified,
+    banned: row.banned,
   }));
 }
 
