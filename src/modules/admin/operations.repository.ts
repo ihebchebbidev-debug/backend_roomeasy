@@ -242,7 +242,8 @@ export async function listVerifications(options: { limit: number; offset: number
     `SELECT u.id AS user_id, u.full_name, u.email, v.status, v.document_kind, v.notes, v.decided_at, u.verified
        FROM app_user u
        LEFT JOIN identity_verification v ON v.user_id = u.id
-      WHERE ($3::verification_status IS NULL OR v.status = $3::verification_status)
+      WHERE u.deleted_at IS NULL
+        AND ($3::verification_status IS NULL OR v.status = $3::verification_status)
         AND ($3::verification_status IS NOT NULL OR v.user_id IS NOT NULL OR u.verified = false)
       ORDER BY coalesce(v.updated_at, u.created_at) DESC
       LIMIT $1 OFFSET $2`,

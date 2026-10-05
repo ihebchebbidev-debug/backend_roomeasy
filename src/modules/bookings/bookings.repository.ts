@@ -39,6 +39,9 @@ export type BookingDto = {
   propertyCountry: string;
   propertyPhoto: string | null;
   hostId: string | null;
+  /** Host display name and e-mail, so back-office views can show who hosts the stay. */
+  hostName: string | null;
+  hostEmail: string | null;
   guestId: string | null;
   guest: { name: string; email: string | null; phone: string | null };
   message: string | null;
@@ -103,6 +106,8 @@ type BookingRow = {
   property_country: string;
   property_photo: string | null;
   host_id: string | null;
+  host_name: string | null;
+  host_email: string | null;
   cancellation_policy: CancellationPolicy;
   guest_id: string | null;
   guest_name: string;
@@ -143,6 +148,9 @@ const iso = (value: Date | string) => (typeof value === "string" ? value.slice(0
 const SELECT_BOOKING = `
   SELECT b.id, b.reference, b.property_id, p.name AS property_name, p.city AS property_city,
          p.country AS property_country, p.host_id, p.cancellation_policy,
+         (SELECT coalesce(nullif(hp.display_name, ''), hu.full_name) FROM app_user hu
+            LEFT JOIN host_profile hp ON hp.user_id = hu.id WHERE hu.id = p.host_id) AS host_name,
+         (SELECT hu.email FROM app_user hu WHERE hu.id = p.host_id AND hu.deleted_at IS NULL) AS host_email,
          (SELECT url FROM property_photo ph WHERE ph.property_id = p.id ORDER BY ph.position LIMIT 1) AS property_photo,
          b.guest_id, b.guest_name, b.guest_email, b.guest_phone, b.message,
          b.check_in, b.check_out, b.guests, b.status, b.is_mobile_booking, b.currency, b.fx_rate_to_eur,
@@ -177,6 +185,8 @@ function mapBooking(row: BookingRow): BookingDto {
     propertyCountry: row.property_country,
     propertyPhoto: row.property_photo,
     hostId: row.host_id,
+    hostName: row.host_name ?? null,
+    hostEmail: row.host_email ?? null,
     guestId: row.guest_id,
     guest: { name: row.guest_name, email: row.guest_email, phone: row.guest_phone },
     message: row.message,
