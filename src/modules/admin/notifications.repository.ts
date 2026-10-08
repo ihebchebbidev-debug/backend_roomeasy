@@ -16,9 +16,11 @@ export async function queueNotification(entry: {
   subject: string;
   body: string;
   payload?: Record<string, unknown>;
+  /** Language for address-only emails (no recipientId), e.g. the account's saved locale. */
+  locale?: string | null;
 }): Promise<void> {
   let email = entry.recipientEmail ?? null;
-  let locale = "fr";
+  let locale = entry.locale || "fr";
 
   if (entry.recipientId) {
     const row = await queryOne<{ email: string; locale: string }>(

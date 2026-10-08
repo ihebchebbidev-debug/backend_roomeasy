@@ -354,6 +354,7 @@ accountsRouter.post(
           "If you did not ask for this, you can ignore this message — your password stays unchanged.",
         ].join("\n"),
         payload: { expiresAt: issued.expiresAt, code: issued.code, name: issued.fullName },
+        locale: issued.locale,
       });
       // Password resets are time-sensitive: flush the queue now instead of
       // waiting for the background worker's next tick.
