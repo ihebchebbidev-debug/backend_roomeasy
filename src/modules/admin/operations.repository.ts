@@ -75,7 +75,9 @@ export async function adminCancelBooking(input: {
     throw apiError("NOT_CANCELLABLE", { message: "This booking is already cancelled." });
   }
 
-  const refundUsd = Math.round(booking.totalUsd * input.refundPercent) / 100;
+  // Never send back more than is still refundable: earlier partial refunds count.
+  const remaining = Math.max(0, booking.totalUsd - booking.refundedUsd);
+  const refundUsd = Math.min(remaining, Math.round(booking.totalUsd * input.refundPercent) / 100);
 
   // Send the money back through Stripe first: if it fails, nothing in our own
   // tables claims the guest was refunded.
@@ -157,6 +159,11 @@ export async function adjustBooking(input: {
   adminId: string;
 }) {
   const target = await loadBooking(input.bookingId);
+  if (input.totalUsd !== undefined && input.totalUsd < target.refundedUsd) {
+    throw apiError("VALIDATION_FAILED", {
+      message: `The total cannot be lower than the ${target.refundedUsd.toFixed(2)} USD already refunded.`,
+    });
+  }
   await query(
     `UPDATE booking
         SET check_in = coalesce($2::date, check_in),

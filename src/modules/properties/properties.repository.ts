@@ -100,6 +100,21 @@ type PropertyRow = {
   total_count?: string;
 };
 
+/**
+ * Public listings never reveal the exact spot: the point is shifted by up to
+ * ~450 m (stable per listing) so the 900 m zone circle still contains the
+ * real place. Paid guests get the exact position from the booking endpoint.
+ */
+export function approximateCoords(id: string, lat: number, lng: number): { lat: number; lng: number } {
+  let h = 2166136261;
+  for (let i = 0; i < id.length; i++) h = Math.imul(h ^ id.charCodeAt(i), 16777619);
+  const angle = ((h >>> 0) % 3600) / 3600 * 2 * Math.PI;
+  const dist = 250 + ((h >>> 12) % 200); // metres
+  const dLat = (dist * Math.cos(angle)) / 111_320;
+  const dLng = (dist * Math.sin(angle)) / (111_320 * Math.max(0.2, Math.cos((lat * Math.PI) / 180)));
+  return { lat: Math.round((lat + dLat) * 1e4) / 1e4, lng: Math.round((lng + dLng) * 1e4) / 1e4 };
+}
+
 export function mapProperty(row: PropertyRow): PropertyDto {
   const place = row.location_label ?? [row.city, row.country].filter(Boolean).join(", ");
   const photos = (row.photos ?? []).filter(Boolean);
@@ -114,7 +129,7 @@ export function mapProperty(row: PropertyRow): PropertyDto {
     postal: row.postal_code,
     coords:
       row.latitude !== null && row.longitude !== null
-        ? { lat: Number(row.latitude), lng: Number(row.longitude) }
+        ? approximateCoords(row.id, Number(row.latitude), Number(row.longitude))
         : null,
     guests: row.guests,
     rooms: row.rooms,

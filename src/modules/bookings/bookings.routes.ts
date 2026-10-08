@@ -156,6 +156,31 @@ bookingsRouter.get(
   }),
 );
 
+/**
+ * Exact map position of the booked place. Public listing data only carries an
+ * approximate zone; the precise spot unlocks once the guest has paid.
+ */
+bookingsRouter.get(
+  "/:bookingId/location",
+  asyncHandler(async (req, res) => {
+    const { bookingId } = validateParams(bookingParams, req);
+    const booking = await assertBookingAccess(bookingId, { userId: currentUser(req).userId, isAdmin: isAdmin(req) });
+    const { queryOne } = await import("@/db/query.js");
+    const row = await queryOne<{ latitude: string | null; longitude: string | null; paid: boolean }>(
+      `SELECT p.latitude, p.longitude,
+              EXISTS (SELECT 1 FROM payment pay WHERE pay.booking_id = b.id AND pay.status = 'paid') AS paid
+         FROM booking b JOIN property p ON p.id = b.property_id
+        WHERE b.id = $1`,
+      [booking.id],
+    );
+    const unlocked = !!row?.paid && !["cancelled", "declined"].includes(booking.status);
+    if (!row || !unlocked || row.latitude === null || row.longitude === null) {
+      return ok(res, { unlocked: false, coords: null });
+    }
+    return ok(res, { unlocked: true, coords: { lat: Number(row.latitude), lng: Number(row.longitude) } });
+  }),
+);
+
 /** PDF invoice for one booking: available to its guest, its host and admins. */
 bookingsRouter.get(
   "/:bookingId/invoice.pdf",

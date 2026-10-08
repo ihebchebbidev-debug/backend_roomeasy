@@ -1062,12 +1062,18 @@ export async function cancelBooking(input: {
     });
   }
 
-  const refund = refundFor({
+  const policyRefund = refundFor({
     policy: booking.cancellationPolicy,
     checkIn: booking.checkIn,
     totalUsd: booking.price.totalUsd,
     cancelledBy: input.actorRole,
   });
+  // Money already sent back (an earlier partial refund) is never paid twice.
+  const alreadyRefunded = booking.payment?.refundedUsd ?? 0;
+  const refund = {
+    ...policyRefund,
+    amountUsd: Math.max(0, Math.round((Math.min(policyRefund.amountUsd, booking.price.totalUsd - alreadyRefunded)) * 100) / 100),
+  };
 
   // Send the money back through Stripe before recording the refund, so the
   // payment row can never claim a refund the card never received.
@@ -1118,7 +1124,7 @@ export async function cancelBooking(input: {
 
     if (refund.amountUsd > 0) {
       await query(
-        `UPDATE payment SET status = 'refunded', refunded_usd = $2
+        `UPDATE payment SET status = 'refunded', refunded_usd = refunded_usd + $2
          WHERE booking_id = $1 AND status IN ('authorized', 'paid')`,
         [booking.id, refund.amountUsd],
         { client, label: "bookings.refundPayment" },
