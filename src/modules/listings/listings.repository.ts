@@ -173,6 +173,16 @@ export async function saveListing(input: {
     throw apiError("PROPERTY_ID_TAKEN", { details: { propertyId: draft.propertyId } });
   }
 
+  // One listing per property: when the property already has a listing, edit
+  // that row whatever id the client guessed (seeded rows use other ids, and a
+  // second insert would hit the unique property_id constraint).
+  const listingForProperty = await queryOne<{ id: string }>(
+    `SELECT id FROM listing WHERE property_id = $1`,
+    [draft.propertyId],
+    { label: "listings.listingForProperty" },
+  );
+  if (listingForProperty) draft.listingId = listingForProperty.id;
+
   // The listing row is upserted by id too: it must belong to this same
   // property (and so to this host), or another host's listing could be overwritten.
   const existingListing = await queryOne<{ property_id: string; host_id: string | null }>(
