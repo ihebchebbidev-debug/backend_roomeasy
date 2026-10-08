@@ -32,6 +32,14 @@ export async function queueNotification(entry: {
       email = email ?? row.email;
       locale = row.locale;
     }
+  } else if (email && !entry.locale) {
+    // Address-only email (e.g. password reset): use that account's saved language.
+    const row = await queryOne<{ locale: string }>(
+      "SELECT locale FROM app_user WHERE lower(email) = lower($1)",
+      [email],
+      { label: "notifications.recipient_by_email" },
+    );
+    if (row?.locale) locale = row.locale;
   }
 
   if (!email) return; // nothing to send to

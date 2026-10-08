@@ -768,13 +768,18 @@ export async function createEmailVerificationToken(
 }
 
 export async function verifyEmailWithToken(token: string): Promise<void> {
-  const row = await queryOne<{ id: string; user_id: string }>(
-    `SELECT id, user_id FROM email_verification_token
-      WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now()`,
+  const row = await queryOne<{ id: string; user_id: string; used_at: Date | null; email_verified: boolean }>(
+    `SELECT t.id, t.user_id, t.used_at, u.email_verified
+       FROM email_verification_token t
+       JOIN app_user u ON u.id = t.user_id
+      WHERE t.token_hash = $1 AND t.expires_at > now()`,
     [hashToken(token)],
     { label: "accounts.findVerificationToken" },
   );
-  if (!row) throw apiError("VERIFICATION_TOKEN_INVALID", { message: "This verification link is invalid or has expired." });
+  // Opening the same link twice (a reload, a second click, the launch screen
+  // reloading the page) must still confirm, not report an "invalid" link.
+  if (row && row.used_at && row.email_verified) return;
+  if (!row || row.used_at) throw apiError("VERIFICATION_TOKEN_INVALID", { message: "This verification link is invalid or has expired." });
 
   await transaction(async (client) => {
     await query(`UPDATE app_user SET email_verified = true WHERE id = $1`, [row.user_id], {
