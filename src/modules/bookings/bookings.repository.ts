@@ -759,10 +759,11 @@ export async function listHostBookings(
   const clauses = [
     "p.host_id = $1",
     // A pending request is only real once the guest has actually paid (or the
-    // card was authorised); an unpaid pending row is a checkout in progress.
-    `(b.status <> 'pending' OR EXISTS (
+    // card was authorised); an unpaid pending row is a checkout in progress,
+    // and an unpaid cancelled row is an abandoned checkout that was released.
+    `(b.status NOT IN ('pending', 'cancelled') OR EXISTS (
         SELECT 1 FROM payment pay
-         WHERE pay.booking_id = b.id AND pay.status IN ('authorized', 'paid')))`,
+         WHERE pay.booking_id = b.id AND pay.status IN ('authorized', 'paid', 'refunded')))`,
   ];
   const values: unknown[] = [hostId];
 

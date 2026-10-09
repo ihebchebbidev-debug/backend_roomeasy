@@ -170,7 +170,9 @@ export async function hostDashboard(hostId: string, window = 90): Promise<HostDa
          SELECT x.status::text AS status, x.refunded_usd FROM payment x
           WHERE x.booking_id = b.id ORDER BY x.created_at DESC LIMIT 1
        ) pay ON true
-      WHERE p.host_id = $1`,
+      WHERE p.host_id = $1
+        -- Abandoned (never paid) checkouts are not requests the host ever saw.
+        AND (b.status NOT IN ('pending', 'cancelled') OR pay.status IN ('authorized', 'paid', 'refunded'))`,
     [hostId],
     { label: "host.dashboard.bookings" },
   );
