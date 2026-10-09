@@ -40,6 +40,8 @@ export type TemplateKey =
   | "booking_confirmed_guest"
   | "booking_confirmed_host"
   | "booking_declined_guest"
+  | "booking_expired_guest"
+  | "booking_expired_host"
   | "booking_cancelled_by_guest"
   | "booking_cancelled_by_host"
   | "booking_cancelled_by_system"
@@ -218,6 +220,20 @@ const CATALOGUE: Record<TemplateKey, TemplateEntry> = {
     es: { subject: "La reserva {{reference}} fue rechazada", body: "El anfitrión rechazó tu solicitud de reserva {{reference}} para {{stayName}} ({{checkIn}} → {{checkOut}}). Cualquier importe retenido ha sido reembolsado íntegramente.\n\nVer la reserva: {{link}}" },
     de: { subject: "Buchung {{reference}} wurde abgelehnt", body: "Der Gastgeber hat Ihre Buchungsanfrage {{reference}} für {{stayName}} ({{checkIn}} → {{checkOut}}) abgelehnt. Ein gehaltener Betrag wurde vollständig erstattet.\n\nBuchung ansehen: {{link}}" },
     pt: { subject: "A reserva {{reference}} foi recusada", body: "O anfitrião recusou o seu pedido de reserva {{reference}} para {{stayName}} ({{checkIn}} → {{checkOut}}). Qualquer valor retido foi totalmente reembolsado.\n\nVer a reserva: {{link}}" },
+  },
+  booking_expired_guest: {
+    en: { subject: "Booking request {{reference}} expired", body: "The host did not answer your booking request {{reference}} for {{stayName}} ({{checkIn}} → {{checkOut}}) in time, so it was cancelled automatically. Any amount held on your card has been released or refunded in full.\n\nView the booking: {{link}}" },
+    fr: { subject: "La demande de réservation {{reference}} a expiré", body: "L'hôte n'a pas répondu à temps à votre demande de réservation {{reference}} pour {{stayName}} ({{checkIn}} → {{checkOut}}). Elle a donc été annulée automatiquement. Toute somme retenue sur votre carte a été libérée ou intégralement remboursée.\n\nVoir la réservation : {{link}}" },
+    es: { subject: "La solicitud de reserva {{reference}} ha caducado", body: "El anfitrión no respondió a tiempo a tu solicitud de reserva {{reference}} para {{stayName}} ({{checkIn}} → {{checkOut}}), por lo que se canceló automáticamente. Cualquier importe retenido en tu tarjeta se ha liberado o reembolsado íntegramente.\n\nVer la reserva: {{link}}" },
+    de: { subject: "Buchungsanfrage {{reference}} ist abgelaufen", body: "Der Gastgeber hat Ihre Buchungsanfrage {{reference}} für {{stayName}} ({{checkIn}} → {{checkOut}}) nicht rechtzeitig beantwortet, daher wurde sie automatisch storniert. Ein auf Ihrer Karte gehaltener Betrag wurde freigegeben oder vollständig erstattet.\n\nBuchung ansehen: {{link}}" },
+    pt: { subject: "O pedido de reserva {{reference}} expirou", body: "O anfitrião não respondeu a tempo ao seu pedido de reserva {{reference}} para {{stayName}} ({{checkIn}} → {{checkOut}}), por isso foi cancelado automaticamente. Qualquer valor retido no seu cartão foi libertado ou totalmente reembolsado.\n\nVer a reserva: {{link}}" },
+  },
+  booking_expired_host: {
+    en: { subject: "You missed booking request {{reference}}", body: "You did not answer the booking request {{reference}} from {{guestName}} for {{stayName}} ({{checkIn}} → {{checkOut}}) in time. It was cancelled automatically and the guest was refunded.\n\nView the booking: {{link}}" },
+    fr: { subject: "Vous avez manqué la demande {{reference}}", body: "Vous n'avez pas répondu à temps à la demande de réservation {{reference}} de {{guestName}} pour {{stayName}} ({{checkIn}} → {{checkOut}}). Elle a été annulée automatiquement et le voyageur a été remboursé.\n\nVoir la réservation : {{link}}" },
+    es: { subject: "No respondiste a la solicitud {{reference}}", body: "No respondiste a tiempo a la solicitud de reserva {{reference}} de {{guestName}} para {{stayName}} ({{checkIn}} → {{checkOut}}). Se canceló automáticamente y se reembolsó al huésped.\n\nVer la reserva: {{link}}" },
+    de: { subject: "Buchungsanfrage {{reference}} verpasst", body: "Sie haben die Buchungsanfrage {{reference}} von {{guestName}} für {{stayName}} ({{checkIn}} → {{checkOut}}) nicht rechtzeitig beantwortet. Sie wurde automatisch storniert und der Gast erhielt eine Erstattung.\n\nBuchung ansehen: {{link}}" },
+    pt: { subject: "Perdeu o pedido de reserva {{reference}}", body: "Não respondeu a tempo ao pedido de reserva {{reference}} de {{guestName}} para {{stayName}} ({{checkIn}} → {{checkOut}}). Foi cancelado automaticamente e o hóspede foi reembolsado.\n\nVer a reserva: {{link}}" },
   },
   booking_cancelled_by_guest: {
     en: { subject: "Booking {{reference}} was cancelled by the guest", body: "The guest cancelled the booking {{reference}} for {{stayName}} ({{checkIn}} → {{checkOut}}). Refund issued to the guest: {{refundUsd}} USD.\n\nView the booking: {{link}}" },

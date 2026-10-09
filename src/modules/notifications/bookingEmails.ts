@@ -74,6 +74,7 @@ export async function notifyBookingEvent(
     | "created"
     | "confirmed"
     | "declined"
+    | "expired_no_response"
     | "cancelled_by_guest"
     | "cancelled_by_host"
     | "cancelled_by_system"
@@ -93,6 +94,10 @@ export async function notifyBookingEvent(
         break;
       case "declined":
         await send("booking_declined_guest", "guest", facts);
+        break;
+      case "expired_no_response":
+        await send("booking_expired_guest", "guest", facts);
+        await send("booking_expired_host", "host", facts);
         break;
       case "cancelled_by_guest":
         await send("booking_cancelled_by_guest", "guest", facts);

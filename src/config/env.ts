@@ -63,6 +63,8 @@ const envSchema = z.object({
   /** Background sweep that releases expired holds. */
   BOOKING_MAINTENANCE: boolish(true),
   BOOKING_MAINTENANCE_SECONDS: z.coerce.number().int().min(30).max(3600).default(120),
+  /** Hours a host has to answer a paid request before it is declined and refunded. */
+  BOOKING_HOST_RESPONSE_HOURS: z.coerce.number().int().min(1).max(144).default(24),
 
   // --- Stripe ---------------------------------------------------------------
   STRIPE_SECRET_KEY: z.string().default(""),

@@ -891,12 +891,22 @@ export async function assertBookingAccess(
 export async function decideBooking(input: {
   bookingId: string;
   decision: "confirmed" | "declined";
-  actorId: string;
+  /** Null only for the automatic "host did not answer in time" decline. */
+  actorId: string | null;
   isAdmin: boolean;
+  /** Set by the maintenance sweep: recorded as a system decision, not the host's. */
+  systemExpiry?: boolean;
 }): Promise<BookingDto> {
-  const booking = await assertBookingAccess(input.bookingId, { userId: input.actorId, isAdmin: input.isAdmin });
+  const system = input.systemExpiry === true;
+  if (system && input.decision !== "declined") {
+    throw apiError("FORBIDDEN", { message: "Only a decline can be made automatically." });
+  }
+  if (!system && !input.actorId) {
+    throw apiError("FORBIDDEN", { message: "Only the host of this stay can answer the request." });
+  }
+  const booking = await assertBookingAccess(input.bookingId, { userId: input.actorId ?? "", isAdmin: input.isAdmin || system });
 
-  if (!input.isAdmin && booking.hostId !== input.actorId) {
+  if (!system && !input.isAdmin && booking.hostId !== input.actorId) {
     throw apiError("FORBIDDEN", { message: "Only the host of this stay can answer the request." });
   }
   if (booking.status !== "pending") {
@@ -984,13 +994,20 @@ export async function decideBooking(input: {
     if (input.decision === "declined") {
       await query(
         `INSERT INTO booking_cancellation (booking_id, cancelled_by, cancelled_by_id, policy, refund_percent, refund_usd, reason)
-         VALUES ($1, 'host', $2, $3::cancellation_policy, 100, $4, 'Declined by the host')
+         VALUES ($1, $5::actor_role, $2, $3::cancellation_policy, 100, $4, $6)
          ON CONFLICT (booking_id) DO UPDATE
            SET cancelled_by = excluded.cancelled_by, cancelled_by_id = excluded.cancelled_by_id,
                refund_percent = excluded.refund_percent, refund_usd = excluded.refund_usd,
                reason = excluded.reason, cancelled_at = now()`,
 
-        [booking.id, input.actorId, booking.cancellationPolicy, booking.price.totalUsd],
+        [
+          booking.id,
+          input.actorId,
+          booking.cancellationPolicy,
+          booking.price.totalUsd,
+          system ? "system" : "host",
+          system ? "The host did not answer in time, so the request was declined and refunded." : "Declined by the host",
+        ],
         { client, label: "bookings.declineRefund" },
       );
       await query(
@@ -1024,7 +1041,7 @@ export async function decideBooking(input: {
     throw error;
   }
 
-  void notifyBookingEvent(booking.id, input.decision);
+  void notifyBookingEvent(booking.id, system ? "expired_no_response" : input.decision);
   return mapBooking(row);
 }
 
@@ -1230,6 +1247,39 @@ export async function expireUnpaidBookings(holdMinutes = env.BOOKING_HOLD_MINUTE
     }
   }
   return count;
+}
+
+/**
+ * Declines paid requests the host never answered within
+ * `BOOKING_HOST_RESPONSE_HOURS` (or whose check-in day has arrived), releasing
+ * the card hold / refunding the guest in full. Reuses `decideBooking`, which
+ * claims the row atomically, so a host answering at the same moment is safe.
+ */
+export async function declineUnansweredRequests(hours = env.BOOKING_HOST_RESPONSE_HOURS): Promise<number> {
+  const stale = await query<{ id: string }>(
+    `SELECT b.id
+       FROM booking b
+      WHERE b.status = 'pending'
+        AND (b.created_at < now() - ($1::int * interval '1 hour') OR b.check_in <= CURRENT_DATE)
+        AND EXISTS (SELECT 1 FROM payment p
+                     WHERE p.booking_id = b.id AND p.status IN ('authorized', 'paid'))
+      ORDER BY b.created_at
+      LIMIT 50`,
+    [hours],
+    { label: "bookings.unansweredRequests" },
+  );
+
+  let declined = 0;
+  for (const row of stale) {
+    try {
+      // Works whether or not the stay still has a host account attached.
+      await decideBooking({ bookingId: row.id, decision: "declined", actorId: null, isAdmin: true, systemExpiry: true });
+      declined += 1;
+    } catch (error) {
+      logger.warn({ err: error, bookingId: row.id }, "could not auto-decline unanswered request");
+    }
+  }
+  return declined;
 }
 
 let lastSweepAt = 0;
